@@ -157,6 +157,67 @@
     .three select:last-child { grid-column: 1 / -1; }
     .cls { padding: 11px; grid-template-columns: 55px 1fr; }
   }
+
+  /* Week calendar: an optional, scrollable five-day visual timetable */
+  .wrap.wide { max-width: 920px; }
+  .week-display { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+                  margin: 1px 0 2px; }
+  .week-display > span { font-size: 14px; font-weight: 700; color: var(--muted); }
+  .display-buttons { display: flex; gap: 4px; padding: 4px; border: 1px solid var(--line);
+                     border-radius: 10px; background: var(--surface); }
+  .display-buttons button { font: inherit; font-size: 14px; min-height: 38px; padding: 7px 13px;
+                            border: 0; border-radius: 7px; background: transparent;
+                            color: var(--muted); cursor: pointer; }
+  .display-buttons button[aria-pressed="true"] { background: var(--now); color: var(--ink); font-weight: 700; }
+  .calendar-intro { margin: 16px 0 10px; font-size: 14px; color: var(--muted); }
+  .calendar-scroll { overflow-x: auto; overscroll-behavior-x: contain; border: 1px solid var(--line);
+                     border-radius: 14px; background: var(--surface); scrollbar-width: thin; }
+  .calendar-scroll:focus-visible { outline-offset: 3px; }
+  .calendar-grid { display: grid; grid-template-columns: 54px repeat(5, minmax(132px, 1fr));
+                   min-width: 740px; }
+  .cal-corner, .cal-heading { position: relative; padding: 12px 7px; min-height: 56px;
+                              border-bottom: 1px solid var(--line); background: var(--surface); }
+  .cal-corner { position: sticky; left: 0; z-index: 3; border-right: 1px solid var(--line); }
+  .cal-heading { text-align: center; border-left: 1px solid var(--line); }
+  .cal-heading strong { display: block; color: var(--ink); font-size: 15px; }
+  .cal-heading small { display: block; font-size: 12px; color: var(--muted); }
+  .cal-heading.is-today { background: var(--now); }
+  .cal-heading.is-today strong { color: var(--mine); }
+  .cal-hours { position: sticky; left: 0; z-index: 2; border-right: 1px solid var(--line);
+               background: var(--surface); }
+  .cal-hour { position: absolute; right: 7px; transform: translateY(-.55em); font-size: 11px;
+              font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
+  .cal-hour:first-child { transform: translateY(1px); }
+  .cal-lane { position: relative; border-left: 1px solid var(--line);
+              background-image: repeating-linear-gradient(to bottom,
+                var(--line) 0, var(--line) 1px, transparent 1px, transparent 63px); }
+  .cal-lane.is-today { background-color: var(--now); }
+  .cal-event { position: absolute; z-index: 1; overflow: hidden; padding: 6px 6px 5px;
+               border: 1px solid var(--line); border-left: 4px solid var(--c);
+               border-radius: 7px; background: var(--surface); box-shadow: 0 1px 3px #00000011;
+               text-align: left; line-height: 1.22; }
+  .cal-event { font: inherit; color: var(--ink); cursor: pointer; }
+  .cal-event:hover, .cal-event:focus-visible { outline: 2px solid var(--mine); outline-offset: -2px; }
+  .lesson-dialog { width: min(92vw, 440px); max-width: 440px; padding: 25px; color: var(--ink);
+                   background: var(--surface); border: 1px solid var(--line); border-radius: 16px;
+                   box-shadow: 0 18px 55px #0003; }
+  .lesson-dialog::backdrop { background: #11182799; }
+  .lesson-dialog h2 { font-size: 23px; margin: 0 0 11px; }
+  .lesson-dialog p { margin: 10px 0; }
+  .lesson-dialog .dialog-close { float: right; border: 1px solid var(--line); border-radius: 8px;
+                                 background: var(--paper); color: var(--ink); padding: 6px 12px;
+                                 min-height: 36px; font: inherit; cursor: pointer; }
+  .cal-event strong { display: block; font-size: 12px; line-height: 1.2;
+                      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cal-event .cal-when, .cal-event .cal-place { display: block; font-size: 11px; margin-top: 3px;
+                                                color: var(--muted); white-space: nowrap;
+                                                overflow: hidden; text-overflow: ellipsis; }
+  .cal-event.past { opacity: .65; }
+  .cal-event.changed { outline: 2px solid var(--chg); outline-offset: -2px; }
+  .cal-empty { display: block; padding: 13px 6px; font-size: 12px; text-align: center;
+               color: var(--muted); }
+  .cal-hint { display: none; margin: 8px 2px 0; color: var(--muted); font-size: 13px; }
+  @media (max-width: 780px) { .cal-hint { display: block; } }
   @media (prefers-reduced-motion: reduce) {
     .views button { transition: none; }
   }
@@ -197,6 +258,13 @@
       <button data-week="0" aria-pressed="true">This week<small>&nbsp;</small></button>
       <button data-week="1" aria-pressed="false">Next week<small>&nbsp;</small></button>
     </div>
+<div class="week-display" id="weekDisplay" role="group" aria-label="Weekly timetable layout">
+      <span>Weekly view</span>
+      <div class="display-buttons">
+        <button type="button" data-week-mode="list" aria-pressed="true">List</button>
+        <button type="button" data-week-mode="calendar" aria-pressed="false">Calendar</button>
+      </div>
+    </div>
     <div class="three" id="roomPick" hidden>
       <select id="rDay" aria-label="Day"></select>
       <select id="rTime" aria-label="Start time"></select>
@@ -208,6 +276,14 @@
     </div>
   </header>
   <main id="out"><p class="status">Loading the timetable…</p></main>
+  <dialog id="lessonDialog" class="lesson-dialog" aria-labelledby="lessonTitle">
+    <form method="dialog"><button type="submit" class="dialog-close">Close</button></form>
+    <p class="eyebrow">Lesson details</p>
+    <h2 id="lessonTitle"></h2>
+    <p id="lessonWhen"></p>
+    <p id="lessonPlace"></p>
+    <p id="lessonNotes"></p>
+  </dialog>
 </div>
 
 <script>
@@ -225,6 +301,7 @@
   const $ = id => document.getElementById(id);
   const sel = $('teacher'), out = $('out');
   let view = 'week', offset = 0, data = {}, pending = {};
+  let weekMode = store.get('weekMode') === 'calendar' ? 'calendar' : 'list';
 
   // ---------- controls ----------
   document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
@@ -244,6 +321,17 @@
   $('rDay').onchange = render;
   $('rTime').onchange = render;
   $('rDuration').onchange = render;
+  document.querySelectorAll('[data-week-mode]').forEach(b => {
+    b.onclick = () => {
+      weekMode = b.dataset.weekMode;
+      store.set('weekMode', weekMode);
+      render();
+    };
+  });
+  function syncWeekMode() {
+    document.querySelectorAll('[data-week-mode]').forEach(b =>
+      b.setAttribute('aria-pressed', String(b.dataset.weekMode === weekMode)));
+  }
 
   function syncWeekButtons() {
     document.querySelectorAll('[data-week]').forEach(x => x.setAttribute('aria-pressed', Number(x.dataset.week) === offset));
@@ -395,6 +483,16 @@
       '<ul>' + lines.join('') + '</ul><button type="button" data-action="ack">Mark changes as seen</button></section>';
   }
   out.addEventListener('click', e => {
+    const lesson = e.target.closest('.cal-event');
+    if (lesson) {
+      $('lessonTitle').textContent = lesson.dataset.code || 'Lesson';
+      $('lessonWhen').textContent = lesson.dataset.when || '';
+      $('lessonPlace').textContent = lesson.dataset.place || '';
+      $('lessonNotes').textContent = lesson.dataset.notes || '';
+      $('lessonNotes').hidden = !lesson.dataset.notes;
+      $('lessonDialog').showModal();
+      return;
+    }
     const target = e.target.closest('[data-action="ack"]');
     if (!target) return;
     const res = data[offset], me = sel.value;
@@ -438,6 +536,9 @@
     $('weeks').hidden = view === 'today';
     sel.hidden = view === 'rooms';
     $('roomPick').hidden = view !== 'rooms';
+    $('weekDisplay').hidden = view !== 'week';
+    document.querySelector('.wrap').classList.toggle('wide', view === 'week' && weekMode === 'calendar');
+    syncWeekMode();
     if (view === 'rooms') { $('calBtn').hidden = true; $('calPanel').hidden = true; return renderRooms(res); }
 
     const me = sel.value;
@@ -461,6 +562,10 @@
     $('sub').textContent = mine.length ? mine.length + ' lessons · ' + fmtHours(mins) + ' this week' : 'No scheduled lessons this week';
     const today = new Date().toDateString();
     const ch = changesFor(res, sel.value, mine);
+    if (weekMode === 'calendar') {
+      out.innerHTML = changeSummary(ch) + renderWeekCalendar(res, mine, ch);
+      return;
+    }
     out.innerHTML = changeSummary(ch) +
       DAYS.map(([key, name], i) => {
         const d = dayDate(res, i);
@@ -470,6 +575,87 @@
           '<h2>' + name + ' ' + d.getDate() + '</h2>' +
           (list.length ? list.map(c => row(c, '', ch.marks.get(c))).join('') : '<p class="empty">No classes</p>') + '</section>';
       }).join('');
+  }
+
+
+  // A five-column, vertically timed week. Lesson positions are calculated from
+  // the actual class times, not pre-set timetable periods.
+  function renderWeekCalendar(res, mine, changes) {
+    if (!mine.length) return '<p class="status">No lessons scheduled this week.</p>';
+    const first = Math.max(0, Math.floor(Math.min(8 * 60, ...mine.map(c => toMins(c.start))) / 30) * 30);
+    const last = Math.min(24 * 60, Math.ceil(Math.max(18 * 60, ...mine.map(c => toMins(c.end))) / 30) * 30);
+    const pxPerMin = 1.05, totalHeight = (last - first) * pxPerMin;
+    const today = new Date().toDateString();
+    const headings = DAYS.map(([key, name], i) => {
+      const date = dayDate(res, i);
+      return '<div class="cal-heading' + (date.toDateString() === today ? ' is-today' : '') +
+        '"><strong>' + name.slice(0, 3) + ' ' + date.getDate() + '</strong>' +
+        '<small>' + (date.toDateString() === today ? 'Today' : name) + '</small></div>';
+    }).join('');
+    const ticks = [];
+    for (let mins = first; mins <= last; mins += 60) {
+      ticks.push('<span class="cal-hour" style="top:' + Math.round((mins - first) * pxPerMin) + 'px">' +
+        esc(fmtTime(mins)) + '</span>');
+    }
+    const columns = DAYS.map(([key], i) => {
+      const lessons = byStart(mine.filter(c => c.day === key));
+      const groups = [];
+      let group = [], groupEnd = -1;
+      const finishGroup = () => {
+        if (!group.length) return;
+        const ends = [], arranged = [];
+        group.forEach(c => {
+          const begin = toMins(c.start);
+          let lane = ends.findIndex(end => end <= begin);
+          if (lane < 0) lane = ends.length;
+          ends[lane] = toMins(c.end);
+          arranged.push({ c, lane });
+        });
+        arranged.forEach(item => { item.count = ends.length; });
+        groups.push(...arranged);
+        group = [];
+        groupEnd = -1;
+      };
+      lessons.forEach(c => {
+        if (group.length && toMins(c.start) >= groupEnd) finishGroup();
+        group.push(c);
+        groupEnd = Math.max(groupEnd, toMins(c.end));
+      });
+      finishGroup();
+      const events = groups.map(({ c, lane, count }) => {
+        const start = toMins(c.start), end = toMins(c.end);
+        const top = Math.round((start - first) * pxPerMin) + 2;
+        const height = Math.max(19, Math.round((end - start) * pxPerMin) - 4);
+        const left = (lane / count) * 100, width = 100 / count;
+        const place = c.online ? 'Online' : (c.room ? 'Room ' + c.room : '');
+        const mark = changes.marks.get(c);
+        const altered = mark ? ' changed' : '';
+        const past = dayDate(res, i).getTime() < new Date().setHours(0, 0, 0, 0) ||
+          (dayDate(res, i).toDateString() === today &&
+            end <= new Date().getHours() * 60 + new Date().getMinutes());
+        const detail = [c.code, c.start + '–' + c.end, place, c.notes, mark?.kind].filter(Boolean).join(' · ');
+        return '<button type="button" class="cal-event' + (past ? ' past' : '') + altered +
+          '" aria-label="' + esc(detail) + '" title="' + esc(detail) +
+          '" data-code="' + esc(c.code) + '" data-when="' +
+          esc(DAYS[i][1] + ' ' + dayDate(res, i).getDate() + ' · ' + c.start + '–' + c.end) +
+          '" data-place="' + esc(place) + '" data-notes="' + esc(c.notes || '') +
+          '" style="--c:' + (c.colour || 'var(--mine)') + ';top:' + top + 'px;height:' + height +
+          'px;left:calc(' + left + '% + 4px);width:calc(' + width + '% - 8px)">' +
+          '<strong>' + esc(c.code) + '</strong><span class="cal-when">' +
+          esc(c.start) + '–' + esc(c.end) + '</span>' +
+          '<span class="cal-place">' + esc(place) + (mark ? ' · ' + esc(mark.kind) : '') +
+          '</span></button>';
+      }).join('');
+      return '<div class="cal-lane' + (dayDate(res, i).toDateString() === today ? ' is-today' : '') +
+        '" style="height:' + totalHeight + 'px">' +
+        (events || '<span class="cal-empty">No lessons</span>') + '</div>';
+    }).join('');
+    return '<div class="calendar-intro">Lessons are positioned by time; blank spaces are free periods.</div>' +
+      '<div class="calendar-scroll" tabindex="0" role="region" aria-label="Five-day timetable, horizontally scrollable">' +
+      '<div class="calendar-grid"><div class="cal-corner" aria-hidden="true"></div>' +
+      headings + '<div class="cal-hours" style="height:' + totalHeight + 'px">' + ticks.join('') +
+      '</div>' + columns + '</div></div>' +
+      '<p class="cal-hint">Swipe sideways to see all five days. Tap a class for its full details.</p>';
   }
 
   function durationText(minutes) {
