@@ -196,6 +196,17 @@
                border: 1px solid var(--line); border-left: 4px solid var(--c);
                border-radius: 7px; background: var(--surface); box-shadow: 0 1px 3px #00000011;
                text-align: left; line-height: 1.22; }
+  .cal-event { font: inherit; color: var(--ink); cursor: pointer; }
+  .cal-event:hover, .cal-event:focus-visible { outline: 2px solid var(--mine); outline-offset: -2px; }
+  .lesson-dialog { width: min(92vw, 440px); max-width: 440px; padding: 25px; color: var(--ink);
+                   background: var(--surface); border: 1px solid var(--line); border-radius: 16px;
+                   box-shadow: 0 18px 55px #0003; }
+  .lesson-dialog::backdrop { background: #11182799; }
+  .lesson-dialog h2 { font-size: 23px; margin: 0 0 11px; }
+  .lesson-dialog p { margin: 10px 0; }
+  .lesson-dialog .dialog-close { float: right; border: 1px solid var(--line); border-radius: 8px;
+                                 background: var(--paper); color: var(--ink); padding: 6px 12px;
+                                 min-height: 36px; font: inherit; cursor: pointer; }
   .cal-event strong { display: block; font-size: 12px; line-height: 1.2;
                       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cal-event .cal-when, .cal-event .cal-place { display: block; font-size: 11px; margin-top: 3px;
@@ -265,6 +276,14 @@
     </div>
   </header>
   <main id="out"><p class="status">Loading the timetable…</p></main>
+  <dialog id="lessonDialog" class="lesson-dialog" aria-labelledby="lessonTitle">
+    <form method="dialog"><button type="submit" class="dialog-close">Close</button></form>
+    <p class="eyebrow">Lesson details</p>
+    <h2 id="lessonTitle"></h2>
+    <p id="lessonWhen"></p>
+    <p id="lessonPlace"></p>
+    <p id="lessonNotes"></p>
+  </dialog>
 </div>
 
 <script>
@@ -464,6 +483,16 @@
       '<ul>' + lines.join('') + '</ul><button type="button" data-action="ack">Mark changes as seen</button></section>';
   }
   out.addEventListener('click', e => {
+    const lesson = e.target.closest('.cal-event');
+    if (lesson) {
+      $('lessonTitle').textContent = lesson.dataset.code || 'Lesson';
+      $('lessonWhen').textContent = lesson.dataset.when || '';
+      $('lessonPlace').textContent = lesson.dataset.place || '';
+      $('lessonNotes').textContent = lesson.dataset.notes || '';
+      $('lessonNotes').hidden = !lesson.dataset.notes;
+      $('lessonDialog').showModal();
+      return;
+    }
     const target = e.target.closest('[data-action="ack"]');
     if (!target) return;
     const res = data[offset], me = sel.value;
@@ -605,14 +634,17 @@
           (dayDate(res, i).toDateString() === today &&
             end <= new Date().getHours() * 60 + new Date().getMinutes());
         const detail = [c.code, c.start + '–' + c.end, place, c.notes, mark?.kind].filter(Boolean).join(' · ');
-        return '<div class="cal-event' + (past ? ' past' : '') + altered +
-          '" tabindex="0" role="group" aria-label="' + esc(detail) + '" title="' + esc(detail) +
+        return '<button type="button" class="cal-event' + (past ? ' past' : '') + altered +
+          '" aria-label="' + esc(detail) + '" title="' + esc(detail) +
+          '" data-code="' + esc(c.code) + '" data-when="' +
+          esc(DAYS[i][1] + ' ' + dayDate(res, i).getDate() + ' · ' + c.start + '–' + c.end) +
+          '" data-place="' + esc(place) + '" data-notes="' + esc(c.notes || '') +
           '" style="--c:' + (c.colour || 'var(--mine)') + ';top:' + top + 'px;height:' + height +
           'px;left:calc(' + left + '% + 4px);width:calc(' + width + '% - 8px)">' +
           '<strong>' + esc(c.code) + '</strong><span class="cal-when">' +
           esc(c.start) + '–' + esc(c.end) + '</span>' +
           '<span class="cal-place">' + esc(place) + (mark ? ' · ' + esc(mark.kind) : '') +
-          '</span></div>';
+          '</span></button>';
       }).join('');
       return '<div class="cal-lane' + (dayDate(res, i).toDateString() === today ? ' is-today' : '') +
         '" style="height:' + totalHeight + 'px">' +
