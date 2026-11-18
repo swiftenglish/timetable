@@ -8,7 +8,9 @@ const code = fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8');
 const props = new Map();
 const files = [];
 function file(id, heading, dayNum, created, modified, title = heading) {
-  const info = {id, heading, dayNum, created:new Date(created), modified:new Date(modified), title};
+  const info = {id, heading, dayNum, created:new Date(created), modified:new Date(modified), title,
+    getId(){return this.id;}, getName(){return this.title;},
+    getDateCreated(){return this.created;}, getLastUpdated(){return this.modified;}};
   files.push(info);
   return info;
 }
