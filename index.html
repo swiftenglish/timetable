@@ -264,6 +264,15 @@
   .check-item small { display: block; color: var(--muted); margin-top: 5px; }
   .check-item.error { border-left: 4px solid #bf564a; }
   .check-item.warning { border-left: 4px solid #c09339; }
+  .check-uncertain { margin-top: 20px; border: 1px solid var(--line); border-radius: 12px;
+                     padding: 14px 16px; background: var(--surface); }
+  .check-uncertain summary { cursor: pointer; font-size: 15px; font-weight: 700; }
+  .check-uncertain summary:focus-visible { outline: 2px solid var(--mine); outline-offset: 4px; }
+  .check-uncertain p { margin: 11px 0; font-size: 14px; line-height: 1.45; color: var(--muted); }
+  .check-uncertain ul { padding-left: 20px; margin: 12px 0 0; }
+  .check-uncertain li { padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .check-uncertain li strong { display: block; }
+  .check-uncertain li span { display: block; margin-top: 3px; color: var(--muted); }
   .check-note { color: var(--muted); font-size: 13px; line-height: 1.45; margin: 16px 2px; }
   @media(max-width: 450px) {
     .views button { font-size: 13px; padding: 10px 2px; }
@@ -882,9 +891,24 @@
       return;
     }
     const v = res.validation, stats = v.stats || {};
-    const errors = Number(v.errors || 0), warnings = Number(v.warnings || 0);
-    const checks = Array.isArray(v.issues) ? v.issues : [];
-    const headline = errors ? 'Problems need attention' : warnings ? 'Review recommended' : 'No issues detected';
+    // Keep older Apps Script deployments readable during rollout. They marked
+    // every green lesson as a warning; the new backend reports status separately.
+    const rawChecks = Array.isArray(v.issues) ? v.issues : [];
+    const legacyGreenWarnings = rawChecks.some(issue => issue.kind === 'uncertain-class')
+      ? Math.max(Number(stats.uncertain || 0),
+        rawChecks.filter(issue => issue.kind === 'uncertain-class').length) : 0;
+    const checks = rawChecks.filter(issue => issue.kind !== 'uncertain-class');
+    const errors = Number(v.errors || 0);
+    const warnings = Math.max(0, Number(v.warnings || 0) - legacyGreenWarnings);
+    const total = Math.max(0, Number(v.total || 0) - legacyGreenWarnings);
+    const green = (Array.isArray(res.classes) ? res.classes : [])
+      .filter(c => isUncertain(c))
+      .sort((a, b) => DAYS.findIndex(d => d[0] === a.day) -
+        DAYS.findIndex(d => d[0] === b.day) ||
+        String(a.start).localeCompare(String(b.start)) ||
+        String(a.room || '').localeCompare(String(b.room || ''), undefined, {numeric:true}));
+    const headline = errors ? 'Problems need attention' :
+      warnings ? 'Review recommended' : 'No other issues detected';
     const numbers = [
       ['Errors', errors],
       ['Warnings', warnings],
@@ -898,6 +922,20 @@
       (stats.unassigned || 0) + ' unmapped class blocks · ' +
       (stats.offsite || 0) + ' offsite blocks · ' +
       (stats.uncertain || 0) + ' cancelled/to-confirm blocks</p></section>';
+    if (green.length) {
+      html += '<details class="check-uncertain"><summary>' +
+        green.length + (green.length === 1 ? ' lesson' : ' lessons') +
+        ' — Cancelled / to confirm · View details</summary>' +
+        '<p>These blocks are pale green in the original timetable. The colour alone ' +
+        'cannot distinguish cancellation from awaiting confirmation. They are excluded ' +
+        'from confirmed teaching hours, and rooms remain provisionally occupied.</p>' +
+        '<ul>' + green.map(c => {
+          const dayName = (DAYS.find(d => d[0] === c.day) || [c.day, c.day])[1];
+          return '<li><strong>' + esc(c.code || '(no label)') +
+            '</strong><span>' + esc(dayName) + ' · ' + esc(c.start) +
+            '–' + esc(c.end) + ' · ' + esc(classPlace(c)) + '</span></li>';
+        }).join('') + '</ul></details>';
+    }
     if (checks.length) {
       html += '<section class="check-issues"><h2>Items to check</h2>' +
         checks.map(issue => {
@@ -910,11 +948,11 @@
             '</article>';
         }).join('') + '</section>';
     } else {
-      html += '<p class="no-gaps" style="margin-top:16px">No validation items for this week.</p>';
+      html += '<p class="no-gaps" style="margin-top:16px">No other validation issues for this week.</p>';
     }
-    if (Number(v.total || checks.length) > checks.length) {
+    if (total > rawChecks.length) {
       html += '<p class="check-note">Showing the first ' + checks.length +
-        ' issues out of ' + Number(v.total) + '.</p>';
+        ' other issues out of ' + total + '.</p>';
     }
     html += '<p class="check-note">These checks do not prove that every class is correct. ' +
       'In particular, unfamiliar labels and unusual spreadsheet layouts may need manual review. ' +
