@@ -615,11 +615,8 @@ function validateWeek_(parsed) {
   const mins = t => { const p = String(t || '').split(':').map(Number); return p[0] * 60 + p[1]; };
   const unknown = {};
   classes.forEach(c => {
-    if (c.status === 'uncertain') {
-      push('warning', 'uncertain-class',
-        'The green block "' + c.code + '" may be cancelled or awaiting confirmation. ' +
-        'The colour alone cannot tell which; confirm with the original timetable.', c);
-    }
+    // Green is a tracked lesson status, not an individual validation warning.
+    // Its full details are available from parsed.classes in the Checks screen.
     if (!c.ignored && c.status !== 'uncertain' && !c.teacher && !unknown[c.colour || 'unknown']) {
       unknown[c.colour || 'unknown'] = true;
       push('warning', 'unassigned-colour',
