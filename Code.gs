@@ -24,6 +24,11 @@ const COLOURS_TAB = 'Colours';                     // permanent colour -> teache
 const ACTIVE_COLOURS_TAB = 'Active Colours';       // auto-generated from the two visible weeks
 const ACTIVE_COLOUR_SOURCE_KEY = 'activeColourSourceWeeks_v1';
 const IGNORE = 'IGNORE';                           // not a teacher: hidden, but the room still counts as in use
+// Activity labels can be mapped in Colours without appearing as teachers.
+// Their room remains occupied and they are not treated as unassigned colours.
+function isNonTeacherActivity_(name) {
+  return /^pre[\s-]?test$/i.test(String(name || '').trim());
+}
 // Lilac artefacts apply only to Rooms 1 and 3; grey applies only to offsite columns.
 // A matching colour in any other place may represent a real class.
 // Unlike the IGNORE teacher, artefacts do NOT occupy a classroom or count as lessons.
@@ -63,7 +68,7 @@ const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123',
 // week's and next week's files and keeps the result ready in the cache. The page
 // arrives with that data already inside it, so opening the app doesn't wait on
 // Drive or the timetable sheets.
-const SNAPSHOT_KEY = 'snapshot_v17';
+const SNAPSHOT_KEY = 'snapshot_v18';
 const CACHE_SECONDS = 6 * 60 * 60;   // the longest Apps Script allows
 
 function doGet(e) {
@@ -105,7 +110,8 @@ function refreshScheduled() {
 function refreshSnapshot() {
   const weeks = listWeeks_();
   const map = readColourMap_();
-  const teachers = [...new Set(Object.values(map).filter(n => n !== IGNORE))].sort();
+  const teachers = [...new Set(Object.values(map).filter(n =>
+    n !== IGNORE && !isNonTeacherActivity_(n)))].sort();
   // Parsed weeks are reused until the file or the Colours tab changes.
   const mapKey = Utilities.base64EncodeWebSafe(
     Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(map))).slice(0, 10);
@@ -146,7 +152,7 @@ function buildWeek_(offset, weeks, teachers, mapKey) {
           day: '', time: '', room: '' }] }
     };
   }
-  const key = 'parse11_' + week.id + '_' + week.modified + '_' + mapKey;
+  const key = 'parse12_' + week.id + '_' + week.modified + '_' + mapKey;
   const hit = getBig_(key);
   let parsed = hit ? JSON.parse(hit) : null;
   if (!parsed) {
@@ -195,7 +201,7 @@ function getBig_(key) {
  */
 function listWeeks_() {
   const props = PropertiesService.getScriptProperties();
-  const known = JSON.parse(props.getProperty('weeks') || '{}'); // id -> monday ISO
+  const known = JSON.parse(props.getProperty('weeks') || '{}'); // id -> {modified,mondayIso}
 
   const owners = SOURCE_OWNERS.map(o => "'" + o + "' in owners").join(' or ');
   const since = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString().slice(0, 19);
@@ -204,27 +210,77 @@ function listWeeks_() {
   const files = [];
   const it = DriveApp.searchFiles(q);
   while (it.hasNext()) files.push(it.next());
-  files.sort((a, b) => b.getDateCreated() - a.getDateCreated());
+  // Inspect recently edited files, not just the six most recently created.
+  // A copied template may have an older creation date than its timetable week.
+  files.sort((a, b) => b.getLastUpdated().getTime() - a.getLastUpdated().getTime() ||
+    b.getDateCreated().getTime() - a.getDateCreated().getTime());
 
-  const weeks = [];
-  files.slice(0, 6).forEach(f => {
-    const id = f.getId();
-    let mondayIso = known[id];
-    if (!mondayIso) {
-      const monday = mondayFromFile_(f);
-      if (!monday) return;
-      mondayIso = monday.toISOString();
-      known[id] = mondayIso;
+  const selected = new Map();
+  files.slice(0, 40).forEach(f => {
+    try {
+      const id = f.getId(), modified = f.getLastUpdated().getTime();
+      const cached = known[id];
+      // Legacy cached values were strings and might contain a wrong week:
+      // recompute instead of silently trusting them.
+      let monday = cached && typeof cached === 'object' &&
+        cached.modified === modified && cached.mondayIso
+        ? new Date(cached.mondayIso) : mondayFromFile_(f);
+      if (!monday || !Number.isFinite(monday.getTime()) || monday.getDay() !== 1) return;
+      const mondayIso = monday.toISOString();
+      known[id] = { modified: modified, mondayIso: mondayIso };
+      // When multiple copies claim the same week, use the latest edited one.
+      // This also makes the choice independent of Drive's search order.
+      if (!selected.has(mondayIso)) selected.set(mondayIso, {
+        id: id, title: f.getName().trim(), modified: modified, monday: monday
+      });
+    } catch (err) {
+      console.warn('Skipped unreadable timetable candidate "' + f.getName() +
+        '": ' + (err.message || err));
     }
-    weeks.push({
-      id: id,
-      title: f.getName().trim(),
-      modified: f.getLastUpdated().getTime(),
-      monday: new Date(mondayIso),
-    });
   });
   props.setProperty('weeks', JSON.stringify(known));
-  return weeks;
+  return [...selected.values()].sort((a, b) => a.monday - b.monday);
+}
+
+// Interpret the printed week heading before using file timestamps.
+// The source headings normally say "16 al 20 de noviembre 2026" while the
+// date row above MON contains "16". Cross-month weeks can say
+// "30 al 4 diciembre 2026" (the Monday is in November).
+function mondayFromHeading_(dayNum, heading) {
+  const day = Number(dayNum);
+  if (!Number.isInteger(day) || day < 1 || day > 31) return null;
+  const text = String(heading || '').normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const yearMatch = text.match(/\b(20\d{2})\b/);
+  if (!yearMatch) return null;
+  const months = [
+    ['enero','ene','january','jan'], ['febrero','february','feb'],
+    ['marzo','march','mar'], ['abril','april','abr','apr'],
+    ['mayo','may'], ['junio','june','jun'], ['julio','july','jul'],
+    ['agosto','august','ago','aug'], ['septiembre','setiembre','september','sept','sep','set'],
+    ['octubre','october','oct'], ['noviembre','november','nov'],
+    ['diciembre','december','dic','dec']
+  ];
+  const words = text.match(/\b[a-z]{3,20}\b/g) || [];
+  const hits = words.map(w => months.findIndex(aliases => aliases.includes(w)))
+    .filter(month => month >= 0);
+  if (!hits.length) return null;
+  let month = hits[0], year = Number(yearMatch[1]);
+  // Prefer an explicit month on the first date: "28/09 a 2 octubre".
+  const explicit = text.match(new RegExp('\\b' + day + '\\s*[/.-]\\s*(\\d{1,2})\\b'));
+  if (explicit) {
+    const m = Number(explicit[1]);
+    if (m < 1 || m > 12) return null;
+    month = m - 1;
+    // If the month crosses December/January, the heading year belongs to
+    // the second month (January), not the Monday's month (December).
+    if (month === 11 && hits.includes(0)) year--;
+  } else if (hits.length === 1) {
+    const range = text.match(new RegExp('\\b' + day + '\\s*(?:al|a|to|[-–])\\s*(\\d{1,2})\\b'));
+    if (range && Number(range[1]) < day) month--;
+  }
+  const d = new Date(year, month, day);
+  return d.getFullYear() >= 2020 && d.getDay() === 1 && d.getDate() === day ? d : null;
 }
 
 function mondayFromFile_(file) {
@@ -233,15 +289,27 @@ function mondayFromFile_(file) {
   const dayRow = top.findIndex(r => r.includes('MON'));
   if (dayRow < 1) return null;
   const col = top[dayRow].indexOf('MON');
-  const dayNum = parseInt(top[dayRow - 1][col], 10);
+  const dayNum = Number(String(top[dayRow - 1][col]).trim());
   if (!dayNum) return null;
+  // The embedded header is more authoritative than a manually typed Drive name.
+  const heading = top.slice(0, dayRow)
+    .flat().map(v => String(v || '').trim()).filter(Boolean).join(' ');
+  const dated = mondayFromHeading_(dayNum, heading) ||
+    mondayFromHeading_(dayNum, file.getName());
+  if (dated) return dated;
 
-  const d = mondayOf_(file.getDateCreated());
-  for (let i = 0; i < 10; i++) {       // look up to 10 weeks ahead
-    if (d.getDate() === dayNum) return d;
-    d.setDate(d.getDate() + 7);
+  // Only use a date fallback when the source file is close to that week.
+  // Otherwise a copied or edited historic timetable can be assigned wrongly.
+  const updated = file.getLastUpdated();
+  const candidates = [];
+  for (let step = -6; step <= 6; step++) {
+    const d = mondayOf_(updated);
+    d.setDate(d.getDate() + step * 7);
+    if (d.getDate() === dayNum &&
+        Math.abs(updated.getTime() - d.getTime()) <= 14 * 24 * 3600 * 1000)
+      candidates.push(d);
   }
-  return null;
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 // ---------- Parsing one week ----------
@@ -353,11 +421,13 @@ function parseWeek_(fileId) {
       // IBC lessons are always offsite, regardless of the spreadsheet column.
       const offsite = !!col.offsite || isIbcClassCode_(cell);
       const room = offsite ? '' : col.room;
-      const teacher = resolveTeacherColour_(colour, { room: room, offsite: offsite }, colourMap);
+      const assigned = resolveTeacherColour_(colour, { room: room, offsite: offsite }, colourMap);
+      const activity = isNonTeacherActivity_(assigned) ? assigned : null;
       cur = {
         day: col.day, room: room, offsite: offsite,
         start: t.mins, end: t.mins + 30,
-        code: cell, notes: [], colour: colour, teacher: teacher || null,
+        code: cell, notes: [], colour: colour, activity: activity,
+        teacher: activity ? IGNORE : assigned || null,
         status: isUncertainClass_(colour) ? 'uncertain' : 'confirmed',
       };
     });
@@ -383,7 +453,8 @@ function parseWeek_(fileId) {
         notes: k.notes.filter(n => !isOL(n)).join(' / '),
         online: online,
         colour: k.colour, teacher: k.teacher === IGNORE ? null : k.teacher,
-        ignored: k.teacher === IGNORE, status: k.status || 'confirmed',
+        ignored: k.teacher === IGNORE, activity: k.activity || null,
+        status: k.status || 'confirmed',
       };
     }),
     rooms: rooms,
@@ -404,9 +475,10 @@ function activeColourRows_(parsedWeeks) {
       const hex = String(c.colour || '').trim().toLowerCase();
       if (!/^#[0-9a-f]{6}$/.test(hex) || hex === '#ffffff') return;
       const state = c.status === 'uncertain' ? 'Cancelled / to confirm' :
-        c.ignored ? 'Ignored' : c.teacher ? 'Assigned' : 'Unassigned';
+        c.activity ? 'Activity' : c.ignored ? 'Ignored' :
+        c.teacher ? 'Assigned' : 'Unassigned';
       const name = c.status === 'uncertain' ? 'Cancelled / to confirm' :
-        c.ignored ? 'IGNORE' : c.teacher || 'Unassigned';
+        c.activity || (c.ignored ? 'IGNORE' : c.teacher || 'Unassigned');
       let entry = colours.get(hex);
       if (!entry) {
         entry = { hex: hex, name: name, state: state, blocks: 0,
@@ -523,7 +595,8 @@ function readColourMap_() {
 }
 
 function listTeachers_() {
-  const names = Object.values(readColourMap_()).filter(n => n !== IGNORE);
+  const names = Object.values(readColourMap_()).filter(n =>
+    n !== IGNORE && !isNonTeacherActivity_(n));
   return [...new Set(names)].sort();
 }
 
@@ -546,7 +619,7 @@ function coloursSheet_() {
   let sh = ss.getSheetByName(COLOURS_TAB);
   if (!sh) {
     sh = ss.insertSheet(COLOURS_TAB);
-    sh.appendRow(['Colour', 'Teacher', 'Where it came from', 'Swatch']);
+    sh.appendRow(['Colour', 'Teacher / activity', 'Where it came from', 'Swatch']);
     sh.setFrozenRows(1);
   }
   return sh;

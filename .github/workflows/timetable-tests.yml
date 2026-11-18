@@ -22,3 +22,4 @@ jobs:
           node tests/change-alerts.test.cjs
           node tests/active-colours.test.cjs
           node tests/checks.test.cjs
+          node tests/week-discovery.test.cjs

@@ -59,13 +59,15 @@ block(2, 5, 6, 'A2 REAL', '#e5d8f6');
 block(9, 5, 6, 'C2 REAL', '#d9d2e9');
 // Pale green means cancelled OR awaiting confirmation, never confirmed teaching.
 block(10, 5, 7, 'C1 STATUS UNKNOWN', '#d9ead3');
+block(19, 10, 11, 'Pre-test', '#c9daf8');
 const sheet = {text, bg};
 const names = {'#aa22ff': 'Teacher A', '#cc2299': 'Teacher B',
   '#22ccaa': 'Teacher C', '#e5d8f6': 'IGNORE', '#d9d2e9': 'IGNORE',
-  '#b7b7b7': 'IGNORE', '#000000': 'Tom Cocker'};
+  '#b7b7b7': 'IGNORE', '#000000': 'Tom Cocker',
+  '#c9daf8': 'Pre-test'};
 let loggedUnknown = {};
 const api = vm.runInNewContext(isolatedCode +
-  '\n({parseWeek_,isClassCode_,looksLikeUnknownClassCode_,validateWeek_,isDecorativeCell_,isUncertainClass_,isIbcClassCode_,resolveTeacherColour_});', {
+  '\n({parseWeek_,isClassCode_,looksLikeUnknownClassCode_,validateWeek_,isDecorativeCell_,isUncertainClass_,isIbcClassCode_,resolveTeacherColour_,isNonTeacherActivity_,listTeachers_,activeColourRows_});', {
   readGrid_: () => sheet, readColourMap_: () => names,
   logUnknownColours_: value => { loggedUnknown = value; }
 });
@@ -110,6 +112,20 @@ assert.ok(black, 'black-only offsite column must be discovered');
 assert.equal(black.teacher, 'Tom Cocker');
 assert.equal(black.offsite, true);
 assert.equal(black.room, '');
+const activity = match('TUE', 'Pre-test');
+assert.ok(activity, 'Pre-test activity must remain in the weekly block list');
+assert.equal(activity.room, '5', 'Pre-test still occupies its classroom');
+assert.equal(activity.teacher, null, 'Pre-test is not a teacher');
+assert.equal(activity.ignored, true, 'activity must not trigger unassigned warnings');
+assert.equal(activity.activity, 'Pre-test', 'activity meaning must be preserved');
+assert.equal(api.listTeachers_().includes('Pre-test'), false);
+assert.equal(api.isNonTeacherActivity_('PRE TEST'), true);
+const activityRow = api.activeColourRows_([
+  { found:true, mondayLabel:'16 Nov 2026', classes:week.classes }
+]).find(row => row[0] === '#c9daf8');
+assert.ok(activityRow);
+assert.equal(activityRow[1], 'Pre-test');
+assert.equal(activityRow[2], 'Activity');
 const uncertain = match('MON', 'C1 STATUS UNKNOWN');
 assert.ok(uncertain, 'green block should remain visible for review');
 assert.equal(uncertain.status, 'uncertain');
@@ -156,6 +172,8 @@ const checks = api.validateWeek_(week);
 assert.ok(checks.issues.some(x => x.kind === 'possible-class'));
 assert.ok(checks.issues.some(x => x.kind === 'unrecognised-code'));
 assert.ok(checks.issues.some(x => x.kind === 'unassigned-colour'));
+assert.ok(!checks.issues.some(x => x.kind === 'unassigned-colour' &&
+  x.message.includes('#c9daf8')));
 for(const hex of ['#e5d8f6', '#d9d2e9', '#b7b7b7'])
   assert.ok(checks.issues.some(x => x.kind === 'unassigned-colour' &&
     x.message.includes(hex)), 'scoped colour should be reviewable outside scope: '+hex);
@@ -225,4 +243,4 @@ assert.match(html, /function classPlace\(c\) \{ return c\.offsite \? 'Offsite'/)
 assert.match(html, /c\.day === day && !c\.offsite/);
 assert.match(html, /Cancelled \/ to confirm/);
 assert.match(html, /confirmed = list\.filter\(c => !isUncertain\(c\)\)/);
-console.log('PASS: black offsite classes, scoped IGNORE colours, class parsing, warnings, conflicts, and frontend syntax.');
+console.log('PASS: Pre-test activity, black offsite, scoped IGNORE, class parsing, warnings, and frontend syntax.');
