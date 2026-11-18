@@ -41,6 +41,9 @@ block(6, 5, 6, 'B2 25', '#445566');
 block(27, 5, 7, 'IBC NNN', '#aa22ff');
 text[2][42] = 'WED';
 block(42, 5, 7, 'IBC 38', '#aa22ff');
+// Monday's offsite candidate contains ONLY a black lesson, so detection must
+// not rely on any other coloured class in the column.
+block(13, 5, 6, 'IBC BLACK', '#000000');
 // IBC lessons remain offsite even when entered in numbered classroom columns.
 block(1, 8, 9, 'IBC 45', '#22ccaa');       // Room 1 column
 block(3, 12, 13, 'ibc NNN', '#aa22ff');   // Room 3 column, lower-case code
@@ -58,11 +61,11 @@ block(9, 5, 6, 'C2 REAL', '#d9d2e9');
 block(10, 5, 7, 'C1 STATUS UNKNOWN', '#d9ead3');
 const sheet = {text, bg};
 const names = {'#aa22ff': 'Teacher A', '#cc2299': 'Teacher B',
-  '#22ccaa': 'Teacher C', '#e5d8f6': 'Teacher D', '#d9d2e9': 'Teacher E',
-  '#b7b7b7': 'Teacher F'};
+  '#22ccaa': 'Teacher C', '#e5d8f6': 'IGNORE', '#d9d2e9': 'IGNORE',
+  '#b7b7b7': 'IGNORE', '#000000': 'Tom Cocker'};
 let loggedUnknown = {};
 const api = vm.runInNewContext(isolatedCode +
-  '\n({parseWeek_,isClassCode_,looksLikeUnknownClassCode_,validateWeek_,isDecorativeCell_,isUncertainClass_,isIbcClassCode_});', {
+  '\n({parseWeek_,isClassCode_,looksLikeUnknownClassCode_,validateWeek_,isDecorativeCell_,isUncertainClass_,isIbcClassCode_,resolveTeacherColour_});', {
   readGrid_: () => sheet, readColourMap_: () => names,
   logUnknownColours_: value => { loggedUnknown = value; }
 });
@@ -86,6 +89,27 @@ for (const label of ['A1 LILAC ARTIFACT', 'B2 LILAC ARTIFACT',
 assert.equal(match('MON', 'A2 REAL').room, '2');
 assert.equal(match('MON', 'C2 REAL').room, '9');
 assert.equal(match('MON', 'C1 GREY CLASS').room, '7');
+// IGNORE in the Colours sheet must not globally hide lessons outside its
+// restricted location: all three are still visible and require review.
+for (const code of ['A2 REAL', 'C2 REAL', 'C1 GREY CLASS']) {
+  const lesson = match('MON', code);
+  assert.ok(lesson);
+  assert.equal(lesson.ignored, false, code + ' must not inherit global IGNORE');
+  assert.equal(lesson.teacher, null, code + ' must not be assigned a made-up teacher');
+}
+assert.equal(api.resolveTeacherColour_('#e5d8f6', {room:'1',offsite:false},
+  {'#e5d8f6':'IGNORE'}), 'IGNORE');
+assert.equal(api.resolveTeacherColour_('#e5d8f6', {room:'9',offsite:false},
+  {'#e5d8f6':'IGNORE'}), null);
+assert.equal(api.resolveTeacherColour_('#b7b7b7', {room:'7',offsite:false},
+  {'#b7b7b7':'IGNORE'}), null);
+assert.equal(api.resolveTeacherColour_('#f3f3f3', {room:'7',offsite:false},
+  {'#f3f3f3':'IGNORE'}), 'IGNORE');
+const black = match('MON', 'IBC BLACK');
+assert.ok(black, 'black-only offsite column must be discovered');
+assert.equal(black.teacher, 'Tom Cocker');
+assert.equal(black.offsite, true);
+assert.equal(black.room, '');
 const uncertain = match('MON', 'C1 STATUS UNKNOWN');
 assert.ok(uncertain, 'green block should remain visible for review');
 assert.equal(uncertain.status, 'uncertain');
@@ -132,10 +156,13 @@ const checks = api.validateWeek_(week);
 assert.ok(checks.issues.some(x => x.kind === 'possible-class'));
 assert.ok(checks.issues.some(x => x.kind === 'unrecognised-code'));
 assert.ok(checks.issues.some(x => x.kind === 'unassigned-colour'));
+for(const hex of ['#e5d8f6', '#d9d2e9', '#b7b7b7'])
+  assert.ok(checks.issues.some(x => x.kind === 'unassigned-colour' &&
+    x.message.includes(hex)), 'scoped colour should be reviewable outside scope: '+hex);
 assert.ok(checks.issues.some(x => x.kind === 'uncertain-class'));
 assert.ok(!checks.issues.some(x => x.kind === 'unassigned-colour' && x.message.includes('#d9ead3')));
 assert.equal(checks.stats.uncertain, 1);
-assert.equal(checks.stats.offsite, 4);
+assert.equal(checks.stats.offsite, 5);
 assert.ok(!checks.issues.some(x => x.kind === 'missing-room' && x.message.includes('IBC')),
   'IBC lessons must not be diagnosed as missing a room');
 
@@ -168,6 +195,7 @@ assert.ok(!possible.issues.some(x => x.kind === 'room-overlap'));
 assert.equal(possible.errors, 0);
 assert.equal(possible.stats.unassigned, 0);
 assert.match(code, /c\.teacher === teacher && c\.status !== 'uncertain'/);
+assert.ok(!code.includes("colour !== '#000000'"), 'black must not be excluded from offsite candidate detection');
 assert.match(code, /c\.offsite \? 'Offsite' : c\.online \? 'Online'/);
 
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
@@ -181,4 +209,4 @@ assert.match(html, /function classPlace\(c\) \{ return c\.offsite \? 'Offsite'/)
 assert.match(html, /c\.day === day && !c\.offsite/);
 assert.match(html, /Cancelled \/ to confirm/);
 assert.match(html, /confirmed = list\.filter\(c => !isUncertain\(c\)\)/);
-console.log('PASS: class codes, offsite, green cancellation/confirmation, warnings, conflicts and frontend syntax.');
+console.log('PASS: black offsite classes, scoped IGNORE colours, class parsing, warnings, conflicts, and frontend syntax.');
