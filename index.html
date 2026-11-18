@@ -73,6 +73,14 @@
   .room span { color: var(--muted); font-size: 15px; text-align: right; }
 
   .tag.chg { background: var(--chg-bg); color: var(--chg); }
+  .tag.uncertain { background: #e6f1e2; color: #315c35; margin-top: 3px; }
+  .cls.uncertain { border-style: dashed; }
+  .cal-event.uncertain { border-style: dashed; background: #f0f7ed; color: #28412a; }
+  .uncertain-note { font-size: 13px; color: var(--muted); margin: 12px 0; }
+  @media (prefers-color-scheme: dark) {
+    .tag.uncertain { background: #243d2c; color: #bbdfb9; }
+    .cal-event.uncertain { background: #203026; color: #d1e8cd; }
+  }
   .cls.removed .code { text-decoration: line-through; color: var(--muted); }
   .cls.removed .body { border-left-color: var(--line); }
   .notice { margin: 18px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--chg-bg); color: var(--chg); font-weight: 700; }
@@ -324,6 +332,7 @@
     <h2 id="lessonTitle"></h2>
     <p id="lessonWhen"></p>
     <p id="lessonPlace"></p>
+    <p id="lessonStatus" hidden></p>
     <p id="lessonNotes"></p>
   </dialog>
 </div>
@@ -471,10 +480,14 @@
   // ---------- changes since last visit ----------
   // Each teacher's classes for each week are remembered on this device. Next time,
   // anything new, moved or removed is marked. Marks stay for the whole visit.
-  const sig = c => [c.day, c.start, c.end, c.room, c.online ? 'OL' : '', c.offsite ? 'OFFSITE' : '', c.code, c.notes || ''].join('|');
+  const isUncertain = c => c && (c.status === 'uncertain' || String(c.colour || '').toLowerCase() === '#d9ead3');
+  const statusText = c => isUncertain(c) ? 'Cancelled / to confirm' : 'Confirmed';
+  const sig = c => [c.day, c.start, c.end, c.room, c.online ? 'OL' : '', c.offsite ? 'OFFSITE' : '',
+    isUncertain(c) ? 'UNCERTAIN' : 'CONFIRMED', c.code, c.notes || ''].join('|');
   const storedClass = c => ({
     day: c.day, start: c.start, end: c.end, room: c.room,
-    online: !!c.online, offsite: !!c.offsite, code: c.code, notes: c.notes || ''
+    online: !!c.online, offsite: !!c.offsite, code: c.code, notes: c.notes || '',
+    status: isUncertain(c) ? 'uncertain' : 'confirmed'
   });
   function seenKey(res, me) { return 'seen:' + me + ':' + res.mondayIso; }
   function changesFor(res, me, mine) {
@@ -502,6 +515,7 @@
       if (p.start !== c.start || p.end !== c.end) was.push(p.start + '–' + p.end);
       if (p.room !== c.room || !!p.online !== !!c.online || !!p.offsite !== !!c.offsite)
         was.push(classPlace(p));
+      if (isUncertain(p) !== isUncertain(c)) was.push('previous status: ' + statusText(p));
       if ((p.notes || '') !== (c.notes || '')) was.push('notes updated');
       d.marks.set(c, { kind: 'Changed', was: was.join(' · ') });
     });
@@ -531,6 +545,9 @@
       $('lessonTitle').textContent = lesson.dataset.code || 'Lesson';
       $('lessonWhen').textContent = lesson.dataset.when || '';
       $('lessonPlace').textContent = lesson.dataset.place || '';
+      $('lessonStatus').textContent = lesson.dataset.status === 'uncertain'
+        ? 'Cancelled or awaiting confirmation — check with the coordinator.' : '';
+      $('lessonStatus').hidden = lesson.dataset.status !== 'uncertain';
       $('lessonNotes').textContent = lesson.dataset.notes || '';
       $('lessonNotes').hidden = !lesson.dataset.notes;
       $('lessonDialog').showModal();
@@ -606,8 +623,13 @@
   }
 
   function renderWeek(res, mine) {
-    const mins = mine.reduce((s, c) => s + toMins(c.end) - toMins(c.start), 0);
-    $('sub').textContent = mine.length ? mine.length + ' lessons · ' + fmtHours(mins) + ' this week' : 'No scheduled lessons this week';
+    const confirmed = mine.filter(c => !isUncertain(c));
+    const uncertain = mine.length - confirmed.length;
+    const mins = confirmed.reduce((s, c) => s + toMins(c.end) - toMins(c.start), 0);
+    $('sub').textContent = mine.length ?
+      confirmed.length + ' confirmed lessons · ' + fmtHours(mins) + ' teaching' +
+      (uncertain ? ' · ' + uncertain + ' cancelled/to confirm' : '') :
+      'No scheduled lessons this week';
     const today = new Date().toDateString();
     const ch = changesFor(res, sel.value, mine);
     if (weekMode === 'calendar') {
@@ -678,20 +700,25 @@
         const place = classPlace(c);
         const mark = changes.marks.get(c);
         const altered = mark ? ' changed' : '';
+        const uncertain = isUncertain(c);
         const past = dayDate(res, i).getTime() < new Date().setHours(0, 0, 0, 0) ||
           (dayDate(res, i).toDateString() === today &&
             end <= new Date().getHours() * 60 + new Date().getMinutes());
-        const detail = [c.code, c.start + '–' + c.end, place, c.notes, mark?.kind].filter(Boolean).join(' · ');
-        return '<button type="button" class="cal-event' + (past ? ' past' : '') + altered +
+        const detail = [c.code, c.start + '–' + c.end, place,
+          uncertain ? 'Cancelled / to confirm' : '', c.notes, mark?.kind].filter(Boolean).join(' · ');
+        return '<button type="button" class="cal-event' + (past ? ' past' : '') +
+          (uncertain ? ' uncertain' : '') + altered +
           '" aria-label="' + esc(detail) + '" title="' + esc(detail) +
           '" data-code="' + esc(c.code) + '" data-when="' +
           esc(DAYS[i][1] + ' ' + dayDate(res, i).getDate() + ' · ' + c.start + '–' + c.end) +
-          '" data-place="' + esc(place) + '" data-notes="' + esc(c.notes || '') +
+          '" data-place="' + esc(place) + '" data-status="' +
+          (uncertain ? 'uncertain' : 'confirmed') + '" data-notes="' + esc(c.notes || '') +
           '" style="--c:' + (c.colour || 'var(--mine)') + ';top:' + top + 'px;height:' + height +
           'px;left:calc(' + left + '% + 4px);width:calc(' + width + '% - 8px)">' +
           '<strong>' + esc(c.code) + '</strong><span class="cal-when">' +
           esc(c.start) + '–' + esc(c.end) + '</span>' +
-          '<span class="cal-place">' + esc(place) + (mark ? ' · ' + esc(mark.kind) : '') +
+          '<span class="cal-place">' + esc(place) +
+          (uncertain ? ' · To check' : '') + (mark ? ' · ' + esc(mark.kind) : '') +
           '</span></button>';
       }).join('');
       return '<div class="cal-lane' + (dayDate(res, i).toDateString() === today ? ' is-today' : '') +
@@ -722,12 +749,15 @@
     const [key, name] = DAYS[idx];
     const ch = changesFor(res, sel.value, mine);
     const list = byStart(mine.filter(c => c.day === key));
+    const confirmed = list.filter(c => !isUncertain(c));
+    const uncertainCount = list.length - confirmed.length;
     const nowM = now.getHours() * 60 + now.getMinutes();
-    const current = list.find(c => toMins(c.start) <= nowM && toMins(c.end) > nowM);
-    const next = list.find(c => toMins(c.start) > nowM);
-    const remaining = list.filter(c => toMins(c.end) > nowM).length;
+    const current = confirmed.find(c => toMins(c.start) <= nowM && toMins(c.end) > nowM);
+    const next = confirmed.find(c => toMins(c.start) > nowM);
+    const remaining = confirmed.filter(c => toMins(c.end) > nowM).length;
     $('sub').textContent = name + ' ' + now.getDate() +
-      (list.length ? ' · ' + remaining + ' of ' + list.length + ' lessons remaining' : '');
+      (list.length ? ' · ' + remaining + ' of ' + confirmed.length + ' confirmed lessons remaining' +
+        (uncertainCount ? ' · ' + uncertainCount + ' to check' : '') : '');
     let hero = '';
     if (current || next) {
       const c = current || next;
@@ -740,12 +770,15 @@
         esc(classPlace(c)) + '</p>' +
         (c.notes ? '<p>' + esc(c.notes) + '</p>' : '') + '</section>';
     } else {
-      hero = '<section class="feature"><span class="eyebrow">' + (list.length ? 'All done' : 'Your day') +
-        '</span><h2>' + (list.length ? 'Lessons finished for today' : 'No classes today') +
-        '</h2><p>' + (list.length ? 'Your teaching day is complete.' : 'You have no scheduled lessons today.') +
+      hero = '<section class="feature"><span class="eyebrow">' + (confirmed.length ? 'All done' : 'Your day') +
+        '</span><h2>' + (confirmed.length ? 'Confirmed lessons finished' : 'No confirmed classes today') +
+        '</h2><p>' + (confirmed.length ? 'Your confirmed teaching day is complete.' : 'No confirmed lessons remain today.') +
         '</p></section>';
     }
-    out.innerHTML = changeSummary(ch) + hero + renderDayOverview(list, nowM) +
+    out.innerHTML = changeSummary(ch) + hero +
+      (uncertainCount ? '<p class="uncertain-note">' + uncertainCount +
+        ' lesson block(s) marked cancelled / to confirm. These are not included in confirmed teaching hours.</p>' : '') +
+      renderDayOverview(confirmed, nowM) +
       (list.length ? '<section class="day"><h2>Today’s lessons</h2>' +
         list.map((c) => {
           const s = toMins(c.start), e = toMins(c.end);
@@ -817,7 +850,8 @@
         '<div><strong>' + number + '</strong><span>' + label + '</span></div>').join('') +
       '</div><p>' + (stats.teachers || 0) + ' assigned teachers · ' +
       (stats.unassigned || 0) + ' unmapped class blocks · ' +
-      (stats.offsite || 0) + ' offsite blocks</p></section>';
+      (stats.offsite || 0) + ' offsite blocks · ' +
+      (stats.uncertain || 0) + ' cancelled/to-confirm blocks</p></section>';
     if (checks.length) {
       html += '<section class="check-issues"><h2>Items to check</h2>' +
         checks.map(issue => {
@@ -873,6 +907,7 @@
     const end = t + duration;
     const close = toMins(res.slots[res.slots.length - 1]) + 30;
     const rooms = [...new Set(res.rooms[day] || [])];
+    // Keep uncertain blocks unavailable: a pending class may still need the room.
     const used = res.classes.filter(c => c.day === day && !c.offsite);
     const free = rooms.map(r => {
       const inRoom = used.filter(c => c.room === r);
@@ -885,7 +920,10 @@
     $('sub').textContent = free.length + ' of ' + rooms.length + ' rooms free for ' + duration + ' minutes';
     const intro = '<p class="room-help">Available from ' + esc($('rTime').value) + ' to ' +
       esc(fmtTime(end)) + ' · ' + esc($('rDay').selectedOptions[0]?.textContent || day) + '</p>';
-    out.innerHTML = intro + (free.length
+    const uncertainRooms = used.some(c => isUncertain(c));
+    out.innerHTML = intro +
+      (uncertainRooms ? '<p class="uncertain-note">Rooms with cancelled / to-confirm blocks are not listed as free until their status is resolved.</p>' : '') +
+      (free.length
       ? '<section class="day">' + free.map(f =>
           '<div class="room"><b>Room ' + esc(f.room) + '</b><span>' +
           (f.allDay ? 'Free until closing' : 'Free until ' + fmtTime(f.until)) +
@@ -898,9 +936,11 @@
     let tag = state === 'now' ? '<span class="tag">Now</span>' : state === 'next' ? '<span class="tag">Next</span>' : '';
     if (c.removed) tag = '<span class="tag chg">Removed</span>';
     else if (mark) tag += '<span class="tag chg">' + mark.kind + '</span>';
+    if (!c.removed && isUncertain(c)) tag += '<span class="tag uncertain">Cancelled / to confirm</span>';
     const place = esc(classPlace(c));
     const meta = [place, mark && mark.was ? esc(mark.was) : '', c.removed ? '' : esc(c.notes || '')].filter(Boolean).join(' · ');
-    const cls = 'cls' + (state === 'past' ? ' past' : state === 'now' ? ' now' : state === 'next' ? ' next' : '') + (c.removed ? ' removed' : '');
+    const cls = 'cls' + (state === 'past' ? ' past' : state === 'now' ? ' now' : state === 'next' ? ' next' : '') +
+      (c.removed ? ' removed' : '') + (isUncertain(c) ? ' uncertain' : '');
     return '<div class="' + cls + '"><div class="time">' + c.start + '<span>' + c.end + '</span></div>' +
       '<div class="body" style="--c:' + (c.colour || 'var(--line)') + '"><div class="code">' + esc(c.code) + tag + '</div>' +
       '<div class="meta">' + meta + '</div></div></div>';

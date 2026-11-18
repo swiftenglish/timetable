@@ -50,13 +50,17 @@ block(42, 10, 11, 'GREY OFFSITE WED', '#b7b7b7');
 // Real classes in other rooms must still work with these two lilac colours.
 block(2, 5, 6, 'A2 REAL', '#e5d8f6');
 block(9, 5, 6, 'C2 REAL', '#d9d2e9');
+// Pale green means cancelled OR awaiting confirmation, never confirmed teaching.
+block(10, 5, 7, 'C1 STATUS UNKNOWN', '#d9ead3');
 const sheet = {text, bg};
 const names = {'#aa22ff': 'Teacher A', '#cc2299': 'Teacher B',
   '#22ccaa': 'Teacher C', '#e5d8f6': 'Teacher D', '#d9d2e9': 'Teacher E',
   '#b7b7b7': 'Teacher F'};
+let loggedUnknown = {};
 const api = vm.runInNewContext(isolatedCode +
-  '\n({parseWeek_,isClassCode_,looksLikeUnknownClassCode_,validateWeek_,isDecorativeCell_});', {
-  readGrid_: () => sheet, readColourMap_: () => names, logUnknownColours_: () => {}
+  '\n({parseWeek_,isClassCode_,looksLikeUnknownClassCode_,validateWeek_,isDecorativeCell_,isUncertainClass_});', {
+  readGrid_: () => sheet, readColourMap_: () => names,
+  logUnknownColours_: value => { loggedUnknown = value; }
 });
 const week = api.parseWeek_('fixture');
 const match = (day, code) => week.classes.find(c => c.day === day && c.code === code);
@@ -78,6 +82,14 @@ for (const label of ['A1 LILAC ARTIFACT', 'B2 LILAC ARTIFACT',
 assert.equal(match('MON', 'A2 REAL').room, '2');
 assert.equal(match('MON', 'C2 REAL').room, '9');
 assert.equal(match('MON', 'C1 GREY CLASS').room, '7');
+const uncertain = match('MON', 'C1 STATUS UNKNOWN');
+assert.ok(uncertain, 'green block should remain visible for review');
+assert.equal(uncertain.status, 'uncertain');
+assert.equal(uncertain.teacher, null);
+assert.equal(api.isUncertainClass_('#D9EAD3'), true);
+assert.equal(api.isUncertainClass_('#d9ead2'), false);
+assert.ok(!Object.hasOwn(loggedUnknown, '#d9ead3'),
+  'green status must not be treated as a newly unassigned teacher colour');
 assert.equal(api.isDecorativeCell_('1', '#E5D8F6'), true);
 assert.equal(api.isDecorativeCell_('3', '#D9D2E9'), true);
 assert.equal(api.isDecorativeCell_('2', '#e5d8f6'), false);
@@ -102,6 +114,9 @@ const checks = api.validateWeek_(week);
 assert.ok(checks.issues.some(x => x.kind === 'possible-class'));
 assert.ok(checks.issues.some(x => x.kind === 'unrecognised-code'));
 assert.ok(checks.issues.some(x => x.kind === 'unassigned-colour'));
+assert.ok(checks.issues.some(x => x.kind === 'uncertain-class'));
+assert.ok(!checks.issues.some(x => x.kind === 'unassigned-colour' && x.message.includes('#d9ead3')));
+assert.equal(checks.stats.uncertain, 1);
 assert.equal(checks.stats.offsite, 2);
 
 const conflicts = api.validateWeek_({
@@ -120,6 +135,19 @@ const conflicts = api.validateWeek_({
 assert.ok(conflicts.issues.some(x => x.kind === 'room-overlap'));
 assert.ok(conflicts.issues.some(x => x.kind === 'teacher-overlap'));
 assert.equal(conflicts.issues.some(x => x.kind === 'missing-room'), false);
+const possible = api.validateWeek_({
+  parserWarnings: [], classes: [
+    {day: 'MON', code: 'B2', teacher: 'Ann', room: '3',
+     start: '9:00', end: '10:00', colour: '#aaa', status: 'confirmed'},
+    {day: 'MON', code: 'Cancelled or maybe', teacher: null, room: '3',
+     start: '9:30', end: '10:30', colour: '#d9ead3', status: 'uncertain'}
+  ]
+});
+assert.ok(possible.issues.some(x => x.kind === 'possible-overlap'));
+assert.ok(!possible.issues.some(x => x.kind === 'room-overlap'));
+assert.equal(possible.errors, 0);
+assert.equal(possible.stats.unassigned, 0);
+assert.match(code, /c\.teacher === teacher && c\.status !== 'uncertain'/);
 
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)];
@@ -128,4 +156,6 @@ for (const script of scripts) new vm.Script(script[1]);
 assert.match(html, /data-view="checks"/);
 assert.match(html, /function renderDayOverview/);
 assert.match(html, /function renderChecks/);
-console.log('PASS: class codes, offsite, decorative colours, warnings, conflicts and frontend syntax.');
+assert.match(html, /Cancelled \/ to confirm/);
+assert.match(html, /confirmed = list\.filter\(c => !isUncertain\(c\)\)/);
+console.log('PASS: class codes, offsite, green cancellation/confirmation, warnings, conflicts and frontend syntax.');
