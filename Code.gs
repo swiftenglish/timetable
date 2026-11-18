@@ -23,9 +23,8 @@ const ALERT_ALSO = [];
 const COLOURS_TAB = 'Colours';                     // tab in THIS sheet: colour -> teacher
 const IGNORE = 'IGNORE';                           // not a teacher: hidden, but the room still counts as in use
 
-// A cell starting with one of these begins a new class; anything else inside a
-// coloured block (dates, "o.l.", student counts) is shown as a note.
-// Add to this list if a class type ever runs together with the one before it.
+// Explicit course families, supplemented by flexible numbered-code recognition.
+// Ambiguous unfamiliar codes are flagged for review rather than split blindly.
 const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123', '124', '125',
   'IBC', 'DOM', 'KET', 'PET', 'FCE', 'CAE', 'CPE', 'IELTS', 'TOEFL', 'K1', 'K2', 'K3',
   'K4', 'K5', 'MOVERS', 'STARTERS', 'FLYERS'];
@@ -35,7 +34,7 @@ const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123',
 // week's and next week's files and keeps the result ready in the cache. The page
 // arrives with that data already inside it, so opening the app doesn't wait on
 // Drive or the timetable sheets.
-const SNAPSHOT_KEY = 'snapshot_v10';
+const SNAPSHOT_KEY = 'snapshot_v11';
 const CACHE_SECONDS = 6 * 60 * 60;   // the longest Apps Script allows
 
 function doGet(e) {
@@ -102,9 +101,16 @@ function buildWeek_(offset, weeks, teachers, mapKey) {
   target.setDate(target.getDate() + 7 * offset);
   const week = weeks.find(w => sameDay_(w.monday, target));
   if (!week) {
-    return { found: false, mondayIso: target.toISOString(), mondayLabel: fmtDate_(target), teachers: teachers };
+    return {
+      found: false, mondayIso: target.toISOString(), mondayLabel: fmtDate_(target), teachers: teachers,
+      validation: { errors: offset === 0 ? 1 : 0, warnings: offset === 0 ? 0 : 1, total: 1,
+        stats: { total: 0, teachers: 0, unassigned: 0, offsite: 0 },
+        issues: [{ severity: offset === 0 ? 'error' : 'warning', kind: 'missing-week',
+          message: 'No timetable file found for the week of ' + fmtDate_(target) + '.',
+          day: '', time: '', room: '' }] }
+    };
   }
-  const key = 'parse4_' + week.id + '_' + week.modified + '_' + mapKey;
+  const key = 'parse5_' + week.id + '_' + week.modified + '_' + mapKey;
   const hit = getBig_(key);
   let parsed = hit ? JSON.parse(hit) : null;
   if (!parsed) {
@@ -118,6 +124,7 @@ function buildWeek_(offset, weeks, teachers, mapKey) {
     title: week.title,
     teachers: teachers,
     ...parsed,                       // classes, rooms, slots
+    validation: validateWeek_(parsed),
   };
 }
 
@@ -262,6 +269,7 @@ function parseWeek_(fileId) {
   const colourMap = readColourMap_();
   const unknown = {};
   const classes = [];
+  const parserWarnings = [];
 
   cols.forEach(col => {
     let cur = null;
@@ -288,7 +296,16 @@ function parseWeek_(fileId) {
       // (a teacher's back-to-back classes in one room share a colour).
       if (cur && cur.colour === colour && !(cell && isClassCode_(cell))) {
         cur.end = t.mins + 30;
-        if (cell) cur.notes.push(cell);
+        if (cell) {
+          // A plausible unfamiliar course label in the middle of a same-colour
+          // block might be a missed new lesson: surface it rather than guessing.
+          if (looksLikeUnknownClassCode_(cell)) parserWarnings.push({
+            day: col.day, time: fmtMins_(t.mins), room: col.offsite ? 'Offsite' : col.room,
+            message: 'Possible new class code "' + cell + '" inside "' +
+              (cur.code || 'unlabelled block') + '". Check whether this starts another lesson.'
+          });
+          cur.notes.push(cell);
+        }
         return;
       }
       close();
@@ -321,10 +338,12 @@ function parseWeek_(fileId) {
         notes: k.notes.filter(n => !isOL(n)).join(' / '),
         online: online,
         colour: k.colour, teacher: k.teacher === IGNORE ? null : k.teacher,
+        ignored: k.teacher === IGNORE,
       };
     }),
     rooms: rooms,
     slots: times.map(t => fmtMins_(t.mins)),
+    parserWarnings: parserWarnings,
   };
 }
 
@@ -396,9 +415,99 @@ function setup() {
 
 // ---------- Helpers ----------
 function isClassCode_(cell) {
-  // Prefix followed by anything but another letter or digit: "B1 20", "C1+ 66", "DOM. 9", "K3 -28".
-  const re = new RegExp('^(' + CLASS_PREFIXES.join('|') + ')(?![A-Z0-9])', 'i');
-  return re.test(cell.trim());
+  const s = String(cell || '').trim().replace(/\s+/g, ' ').toUpperCase();
+  if (!s) return false;
+  // New three-digit course codes (126, 127, etc.) do not require a code release.
+  // Do not accept a year, a date, or a four-digit student number.
+  if (/^[1-9]\d{2}(?=$|[\s+.-])/.test(s)) return true;
+  // CEFR-family and young learner levels; K4/K5 can be followed by a suffix.
+  if (/^(?:[ABC][12]|K\d{1,2})\+?(?=$|[\s.-])/.test(s)) return true;
+  return CLASS_PREFIXES.some(prefix =>
+    s === prefix || (s.startsWith(prefix) && /^[\s+.-]/.test(s.slice(prefix.length))));
+}
+
+/** Only strong unknown-label candidates are flagged, never automatically split. */
+function looksLikeUnknownClassCode_(cell) {
+  const s = String(cell || '').replace(/\s+/g, ' ').trim().toUpperCase();
+  if (!s || isClassCode_(s) || /^(?:O\.?\s?L\.?|ONLINE|NO CLASE|SEM\b)/.test(s)) return false;
+  // e.g. B3 25, XYZ 14. Names, dates and simple class notes are not warnings.
+  return /^(?:[A-Z]{1,6}\d{1,2}\+?|[A-Z]{1,6}\+?)\s+\d{1,3}[A-Z]?$/.test(s);
+}
+
+function validateWeek_(parsed) {
+  const all = [];
+  const push = (severity, kind, message, c) => all.push({
+    severity: severity, kind: kind, message: message,
+    day: (c && c.day) || '', time: (c && c.start) || (c && c.time) || '',
+    room: (c && (c.offsite ? 'Offsite' : c.room)) || ''
+  });
+  (parsed.parserWarnings || []).forEach(w =>
+    push('warning', 'possible-class', w.message, { day: w.day, time: w.time, room: w.room }));
+  const classes = parsed.classes || [];
+  const location = c => c.offsite ? 'Offsite' : c.online ? 'Online' : c.room ? 'Room ' + c.room : 'no room';
+  const mins = t => { const p = String(t || '').split(':').map(Number); return p[0] * 60 + p[1]; };
+  const unknown = {};
+  classes.forEach(c => {
+    if (!c.ignored && !c.teacher && !unknown[c.colour || 'unknown']) {
+      unknown[c.colour || 'unknown'] = true;
+      push('warning', 'unassigned-colour',
+        'Unassigned timetable colour ' + (c.colour || '(missing)') + ': lessons using it are hidden from teachers.',
+        c);
+    }
+    if (c.code === '(no label)' || !String(c.code || '').trim()) {
+      push('warning', 'missing-label', 'Occupied block has no class label (' + location(c) + ').', c);
+    } else if (looksLikeUnknownClassCode_(c.code)) {
+      push('warning', 'unrecognised-code',
+        'Check unfamiliar class label "' + c.code + '" (' + location(c) + ').', c);
+    }
+    if (!c.offsite && !c.online && !c.room) {
+      push('warning', 'missing-room', '"' + c.code + '" has no classroom or offsite designation.', c);
+    }
+    if (!Number.isFinite(mins(c.start)) || !Number.isFinite(mins(c.end)) ||
+      mins(c.start) >= mins(c.end)) {
+      push('error', 'invalid-time', '"' + c.code + '" has an invalid time range.', c);
+    }
+  });
+  if (!classes.length) push('error', 'empty-timetable', 'No lesson blocks were detected in this timetable.');
+  const days = ['MON', 'TUE', 'WED', 'THU', 'FRI'];
+  days.forEach(day => {
+    const dayClasses = classes.filter(c => c.day === day && Number.isFinite(mins(c.start)) &&
+      Number.isFinite(mins(c.end)) && mins(c.start) < mins(c.end));
+    for (let i = 0; i < dayClasses.length; i++) {
+      const a = dayClasses[i];
+      for (let j = i + 1; j < dayClasses.length; j++) {
+        const b = dayClasses[j];
+        if (mins(a.start) >= mins(b.end) || mins(b.start) >= mins(a.end)) continue;
+        const interval = [a.start, b.start].sort((x, y) => mins(x) - mins(y))[1] +
+          '–' + [a.end, b.end].sort((x, y) => mins(x) - mins(y))[0];
+        // Same teacher in two classes at once: a conflict even if rooms differ.
+        if (a.teacher && a.teacher === b.teacher) {
+          push('error', 'teacher-overlap',
+            a.teacher + ' has overlapping lessons "' + a.code + '" and "' + b.code +
+            '" (' + interval + ').', a);
+        }
+        // Two bookings for one physical classroom; online/offsite do not count.
+        if (!a.offsite && !b.offsite && !a.online && !b.online && a.room && a.room === b.room) {
+          push('error', 'room-overlap',
+            'Room ' + a.room + ' has overlapping lessons "' + a.code + '" and "' + b.code +
+            '" (' + interval + ').', a);
+        }
+      }
+    }
+  });
+  return {
+    errors: all.filter(i => i.severity === 'error').length,
+    warnings: all.filter(i => i.severity === 'warning').length,
+    total: all.length,
+    // Keep the response bounded if a badly formatted sheet creates hundreds of warnings.
+    issues: all.slice(0, 100),
+    stats: {
+      total: classes.length,
+      teachers: [...new Set(classes.map(c => c.teacher).filter(Boolean))].length,
+      unassigned: classes.filter(c => !c.teacher && !c.ignored).length,
+      offsite: classes.filter(c => c.offsite).length
+    }
+  };
 }
 /**
  * Reads the grid as it LOOKS, including conditional formatting. Some cells carry
