@@ -490,13 +490,45 @@
     status: isUncertain(c) ? 'uncertain' : 'confirmed'
   });
   function seenKey(res, me) { return 'seen:' + me + ':' + res.mondayIso; }
+  function previousLessons(res, me) {
+    try {
+      const parsed = JSON.parse(store.get(seenKey(res, me)) || 'null');
+      return Array.isArray(parsed) ? parsed : null;
+    } catch (e) { return null; }
+  }
+  // Only assign a green lesson to a teacher when its original details match
+  // exactly one class previously saved for that teacher on this device.
+  // Never guess from a shared colour, approximate time or matching code alone.
+  function lessonIdentity(c) {
+    const code = String(c.code || '').trim().replace(/\s+/g, ' ').toUpperCase();
+    return JSON.stringify([c.day, c.start, c.end, String(c.room || '').trim(),
+      !!c.offsite, !!c.online, code]);
+  }
+  function teacherLessons(res, me) {
+    const direct = res.classes.filter(c => c.teacher === me);
+    const previous = previousLessons(res, me);
+    if (!previous) return direct;
+    const green = res.classes.filter(c => isUncertain(c) && !c.teacher);
+    const counts = new Map();
+    green.forEach(c => counts.set(lessonIdentity(c), (counts.get(lessonIdentity(c)) || 0) + 1));
+    const teachers = Array.isArray(res.teachers) ? res.teachers : [];
+    const matched = green.filter(c => {
+      const key = lessonIdentity(c);
+      if (counts.get(key) !== 1 || direct.some(lesson => lessonIdentity(lesson) === key)) return false;
+      if (previous.filter(p => lessonIdentity(p) === key).length !== 1) return false;
+      // Shared devices may have snapshots for several teachers. If more than one
+      // person previously had this exact lesson, the original owner is ambiguous.
+      return !teachers.some(other => other !== me &&
+        (previousLessons(res, other) || []).some(p => lessonIdentity(p) === key));
+    }).map(c => ({ ...c, teacher: me, matchedFromPrevious: true }));
+    return direct.concat(matched);
+  }
   function changesFor(res, me, mine) {
     const d = { marks: new Map(), removed: [], count: 0 };
     if (!isFresh) return d; // A cached schedule may be out of date.
     const k = seenKey(res, me);
-    let prev = null;
-    try { prev = JSON.parse(store.get(k) || 'null'); } catch (e) {}
-    if (!Array.isArray(prev)) {
+    const prev = previousLessons(res, me);
+    if (!prev) {
       // On a teacher's first visit there is no previous timetable to compare.
       store.set(k, JSON.stringify(mine.map(storedClass)));
       return d;
@@ -515,9 +547,12 @@
       if (p.start !== c.start || p.end !== c.end) was.push(p.start + '–' + p.end);
       if (p.room !== c.room || !!p.online !== !!c.online || !!p.offsite !== !!c.offsite)
         was.push(classPlace(p));
-      if (isUncertain(p) !== isUncertain(c)) was.push('previous status: ' + statusText(p));
+      const statusChanged = isUncertain(p) !== isUncertain(c);
       if ((p.notes || '') !== (c.notes || '')) was.push('notes updated');
-      d.marks.set(c, { kind: 'Changed', was: was.join(' · ') });
+      d.marks.set(c, {
+        kind: statusChanged ? (isUncertain(c) ? 'Cancelled / to confirm' : 'Confirmed again') : 'Changed',
+        was: was.join(' · '),
+      });
     });
     d.removed = left;
     d.count = d.marks.size + left.length;
@@ -528,9 +563,18 @@
     const lines = [];
     ch.marks.forEach((m, c) => {
       const target = classPlace(c);
-      lines.push('<li><b>' + esc(c.code) + '</b> · ' + esc(c.day) + ' ' + esc(c.start) + ' · ' +
-        esc(target) + (m.kind === 'New' ? ' <b>New</b>' : ' <b>Changed</b>' +
-          (m.was ? '<div>Previously: ' + esc(m.was) + '</div>' : '')) + '</li>');
+      const dayName = (DAYS.find(d => d[0] === c.day) || [c.day, c.day])[1];
+      const statusChange = m.kind === 'Cancelled / to confirm' || m.kind === 'Confirmed again';
+      const label = m.kind === 'New' ? 'New' : statusChange ? m.kind : 'Changed';
+      const details = statusChange
+        ? '<div>' + (m.kind === 'Cancelled / to confirm'
+          ? 'Previously confirmed. Please check with the coordinator before attending.'
+          : 'Previously cancelled / to confirm.') +
+          (m.was ? ' Other changes: ' + esc(m.was) + '.' : '') + '</div>'
+        : (m.was ? '<div>Previously: ' + esc(m.was) + '</div>' : '');
+      lines.push('<li><b>' + esc(c.code) + '</b> · ' + esc(dayName) + ' ' +
+        esc(c.start) + '–' + esc(c.end) + ' · ' + esc(target) +
+        ' <b>' + esc(label) + '</b>' + details + '</li>');
     });
     ch.removed.forEach(c => lines.push('<li><b>' + esc(c.code) + '</b> · ' + esc(c.day) + ' ' +
       esc(c.start) + ' · <b>Removed</b></li>'));
@@ -557,7 +601,9 @@
     if (!target) return;
     const res = data[offset], me = sel.value;
     if (!res || !me || !isFresh) return;
-    store.set(seenKey(res, me), JSON.stringify(res.classes.filter(c => c.teacher === me).map(storedClass)));
+    // Remember matched green blocks too, so they remain visible after acknowledgement
+    // and can be recognised if their status later returns to confirmed.
+    store.set(seenKey(res, me), JSON.stringify(teacherLessons(res, me).map(storedClass)));
     render();
   });
 
@@ -612,7 +658,7 @@
     if (!me) $('calPanel').hidden = true;
     if (!me) { $('sub').textContent = ''; out.innerHTML = '<p class="status">Choose your name to see your classes.</p>'; return; }
     if (!res.found) return noTimetable(res);
-    const mine = res.classes.filter(c => c.teacher === me);
+    const mine = teacherLessons(res, me);
     view === 'today' ? renderToday(res, mine) : renderWeek(res, mine);
   }
 
@@ -935,7 +981,8 @@
   function row(c, state, mark) {
     let tag = state === 'now' ? '<span class="tag">Now</span>' : state === 'next' ? '<span class="tag">Next</span>' : '';
     if (c.removed) tag = '<span class="tag chg">Removed</span>';
-    else if (mark) tag += '<span class="tag chg">' + mark.kind + '</span>';
+    else if (mark && mark.kind !== 'Cancelled / to confirm')
+      tag += '<span class="tag chg">' + esc(mark.kind) + '</span>';
     if (!c.removed && isUncertain(c)) tag += '<span class="tag uncertain">Cancelled / to confirm</span>';
     const place = esc(classPlace(c));
     const meta = [place, mark && mark.was ? esc(mark.was) : '', c.removed ? '' : esc(c.notes || '')].filter(Boolean).join(' · ');
