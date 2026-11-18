@@ -431,7 +431,7 @@ function looksLikeUnknownClassCode_(cell) {
   const s = String(cell || '').replace(/\s+/g, ' ').trim().toUpperCase();
   if (!s || isClassCode_(s) || /^(?:O\.?\s?L\.?|ONLINE|NO CLASE|SEM\b)/.test(s)) return false;
   // e.g. B3 25, XYZ 14. Names, dates and simple class notes are not warnings.
-  return /^(?:[A-Z]{1,6}\+?)\s+\d{1,3}[A-Z]?$/.test(s);
+  return /^(?:[A-Z]{1,6}\d{1,2}\+?|[A-Z]{1,6}\+?)\s+\d{1,3}[A-Z]?$/.test(s);
 }
 
 function validateWeek_(parsed) {
