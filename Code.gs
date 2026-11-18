@@ -666,7 +666,8 @@ function icsFeed_(teacher) {
   ];
   snap.weeks.filter(w => w.found).forEach(w => {
     const monday = new Date(w.mondayIso);
-    w.classes.filter(c => c.teacher === teacher).forEach(c => {
+    // Never add cancelled / unconfirmed blocks to a teacher's confirmed calendar.
+    w.classes.filter(c => c.teacher === teacher && c.status !== 'uncertain').forEach(c => {
       const day = new Date(monday);
       day.setDate(day.getDate() + DAYS.indexOf(c.day));
       const at = t => { const [h, m] = t.split(':').map(Number);
