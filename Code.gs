@@ -20,7 +20,9 @@ const SOURCE_OWNERS = [
 const GRID_TAB = 'TT';                             // tab name in each weekly file
 // Extra people to receive warnings (you always get them), e.g. the head of studies.
 const ALERT_ALSO = [];
-const COLOURS_TAB = 'Colours';                     // tab in THIS sheet: colour -> teacher
+const COLOURS_TAB = 'Colours';                     // permanent colour -> teacher mapping
+const ACTIVE_COLOURS_TAB = 'Active Colours';       // auto-generated from the two visible weeks
+const ACTIVE_COLOUR_SOURCE_KEY = 'activeColourSourceWeeks_v1';
 const IGNORE = 'IGNORE';                           // not a teacher: hidden, but the room still counts as in use
 // Lilac artefacts apply only to Rooms 1 and 3; grey applies only to offsite columns.
 // A matching colour in any other place may represent a real class.
@@ -61,7 +63,7 @@ const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123',
 // week's and next week's files and keeps the result ready in the cache. The page
 // arrives with that data already inside it, so opening the app doesn't wait on
 // Drive or the timetable sheets.
-const SNAPSHOT_KEY = 'snapshot_v16';
+const SNAPSHOT_KEY = 'snapshot_v17';
 const CACHE_SECONDS = 6 * 60 * 60;   // the longest Apps Script allows
 
 function doGet(e) {
@@ -111,6 +113,13 @@ function refreshSnapshot() {
     thisMonday: mondayOf_(new Date()).toISOString(),
     weeks: [0, 1].map(o => buildWeek_(o, weeks, teachers, mapKey)),
   };
+  // The live list is a derived view; a write failure must never stop staff
+  // from viewing the timetable or erase the permanent colour assignments.
+  try {
+    syncActiveColours_(snap.weeks, weeks);
+  } catch (err) {
+    console.error('Active Colours refresh failed: ' + (err.message || err));
+  }
   putBig_(SNAPSHOT_KEY, JSON.stringify(snap), CACHE_SECONDS);
   return snap;
 }
@@ -137,7 +146,7 @@ function buildWeek_(offset, weeks, teachers, mapKey) {
           day: '', time: '', room: '' }] }
     };
   }
-  const key = 'parse10_' + week.id + '_' + week.modified + '_' + mapKey;
+  const key = 'parse11_' + week.id + '_' + week.modified + '_' + mapKey;
   const hit = getBig_(key);
   let parsed = hit ? JSON.parse(hit) : null;
   if (!parsed) {
@@ -381,6 +390,120 @@ function parseWeek_(fileId) {
     slots: times.map(t => fmtMins_(t.mins)),
     parserWarnings: parserWarnings,
   };
+}
+
+// ---------- Automatically maintained live colour list ----------
+/** Pure summary: only class blocks in the selected week snapshots are counted.
+ *  The Colour tab remains the authoritative, permanent teacher mapping.
+ *  Decorative cells never appear because parseWeek_ omits them.
+ */
+function activeColourRows_(parsedWeeks) {
+  const colours = new Map();
+  (parsedWeeks || []).filter(w => w && w.found).forEach(week => {
+    (week.classes || []).forEach(c => {
+      const hex = String(c.colour || '').trim().toLowerCase();
+      if (!/^#[0-9a-f]{6}$/.test(hex) || hex === '#ffffff') return;
+      const state = c.status === 'uncertain' ? 'Cancelled / to confirm' :
+        c.ignored ? 'Ignored' : c.teacher ? 'Assigned' : 'Unassigned';
+      const name = c.status === 'uncertain' ? 'Cancelled / to confirm' :
+        c.ignored ? 'IGNORE' : c.teacher || 'Unassigned';
+      let entry = colours.get(hex);
+      if (!entry) {
+        entry = { hex: hex, name: name, state: state, blocks: 0,
+          weeks: new Set(), example: '' };
+        colours.set(hex, entry);
+      }
+      entry.blocks++;
+      entry.weeks.add(week.mondayLabel);
+      if (entry.state !== state || entry.name !== name) {
+        entry.state = 'Mixed — review';
+        entry.name = 'Check assignments';
+      }
+      if (!entry.example) {
+        const place = c.offsite ? 'Offsite' : c.online ? 'Online' :
+          c.room ? 'Room ' + c.room : 'Location not specified';
+        entry.example = [c.day, c.start, place, c.code].filter(Boolean).join(' · ');
+      }
+    });
+  });
+  return [...colours.values()].sort((a, b) =>
+    a.state.localeCompare(b.state) || a.name.localeCompare(b.name) ||
+    a.hex.localeCompare(b.hex)).map(e =>
+      [e.hex, e.name, e.state, e.blocks, [...e.weeks].join(' / '), e.example, '']);
+}
+
+/** Update the derived sheet safely. If a previously available weekly source
+ *  disappears, pause removals rather than publishing a misleading empty list.
+ *  A not-yet-published next week is fine: use the current week only.
+ */
+function syncActiveColours_(parsedWeeks, discoveredWeeks) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return false;
+  try {
+    const ss = SpreadsheetApp.getActive();
+    let sh = ss.getSheetByName(ACTIVE_COLOURS_TAB);
+    if (!sh) {
+      sh = ss.insertSheet(ACTIVE_COLOURS_TAB);
+      sh.getRange('A1:G1').setValues([[
+        'Colour', 'Teacher / meaning', 'Type', 'Lesson blocks',
+        'Weeks', 'Example lesson', 'Swatch'
+      ]]);
+      sh.getRange('I1:I3').setValues([
+        ['Last refreshed'], ['Weeks included'], ['Sync status']
+      ]);
+      sh.getRange('A1:G1').setFontWeight('bold').setBackground('#f1f3f4');
+      sh.getRange('I1:I3').setFontWeight('bold');
+      sh.setFrozenRows(1);
+      sh.setColumnWidth(2, 175);
+      sh.setColumnWidth(5, 230);
+      sh.setColumnWidth(6, 300);
+      sh.setColumnWidth(10, 340);
+    }
+    const [current, following] = parsedWeeks || [];
+    const props = PropertiesService.getScriptProperties();
+    let previouslyIncluded = {};
+    try { previouslyIncluded = JSON.parse(props.getProperty(ACTIVE_COLOUR_SOURCE_KEY) || '{}'); }
+    catch (e) { previouslyIncluded = {}; }
+    const pause = reason => {
+      sh.getRange('J3').setValue('Paused — ' + reason + '; existing list preserved');
+      return false;
+    };
+    if (!current || !current.found || !Array.isArray(current.classes) ||
+        !current.classes.length) return pause('current week unavailable or empty');
+    if (following && following.found &&
+        (!Array.isArray(following.classes) || !following.classes.length))
+      return pause('following week unreadable or empty');
+    if (following && !following.found && previouslyIncluded[following.mondayIso])
+      return pause('a previously available following week has disappeared');
+
+    const included = [current].concat(following && following.found ? [following] : []);
+    const rows = activeColourRows_(included);
+    // Do not publish a vanished/empty result after a parser or source failure.
+    if (!rows.length) return pause('no lesson colours detected');
+    const oldRows = Math.max(0, sh.getLastRow() - 1);
+    const clearRows = Math.max(oldRows, rows.length);
+    if (clearRows) {
+      sh.getRange(2, 1, clearRows, 7).clearContent();
+      sh.getRange(2, 7, clearRows, 1).setBackground(null);
+    }
+    sh.getRange(2, 1, rows.length, 7).setValues(rows);
+    sh.getRange(2, 7, rows.length, 1).setBackgrounds(
+      rows.map(row => [row[0]]));
+    sh.getRange('J1').setValue(new Date()).setNumberFormat('d MMM yyyy HH:mm');
+    sh.getRange('J2').setValue(included.map(w => w.mondayLabel).join(' / '));
+    sh.getRange('J3').setValue(
+      following && following.found ? 'Up to date' : 'Current week only — next not published');
+    const recorded = {};
+    included.forEach(w => {
+      const source = (discoveredWeeks || []).find(d =>
+        sameDay_(d.monday, new Date(w.mondayIso)));
+      if (source) recorded[w.mondayIso] = source.id;
+    });
+    props.setProperty(ACTIVE_COLOUR_SOURCE_KEY, JSON.stringify(recorded));
+    return true;
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ---------- Colour -> teacher table ----------
@@ -639,14 +762,21 @@ function installDailyCheck() { installTriggers(); }   // older name, still works
 function checkNewColours() {
   const thisMon = mondayOf_(new Date());
   const nextMon = new Date(thisMon); nextMon.setDate(nextMon.getDate() + 7);
+  const currentlyUnassigned = new Set();
   listWeeks_()
     .filter(w => sameDay_(w.monday, thisMon) || sameDay_(w.monday, nextMon))
-    .forEach(w => parseWeek_(w.id));           // adds any new colours to the Colours tab
+    .forEach(w => {
+      const parsed = parseWeek_(w.id);           // logs new colours to Colours
+      parsed.classes.filter(c => !c.teacher && !c.ignored &&
+        c.status !== 'uncertain').forEach(c =>
+        currentlyUnassigned.add(String(c.colour || '').toLowerCase()));
+    });
 
   const sh = coloursSheet_();
   if (sh.getLastRow() < 2) return;
   const waiting = sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues()
-    .filter(([hex, name]) => hex && !String(name).trim());
+    .filter(([hex, name]) => hex && !String(name).trim() &&
+      currentlyUnassigned.has(String(hex).trim().toLowerCase()));
 
   const props = PropertiesService.getScriptProperties();
   const told = JSON.parse(props.getProperty('notified') || '[]');
