@@ -35,7 +35,7 @@ const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123',
 // week's and next week's files and keeps the result ready in the cache. The page
 // arrives with that data already inside it, so opening the app doesn't wait on
 // Drive or the timetable sheets.
-const SNAPSHOT_KEY = 'snapshot_v9';
+const SNAPSHOT_KEY = 'snapshot_v10';
 const CACHE_SECONDS = 6 * 60 * 60;   // the longest Apps Script allows
 
 function doGet(e) {
@@ -104,7 +104,7 @@ function buildWeek_(offset, weeks, teachers, mapKey) {
   if (!week) {
     return { found: false, mondayIso: target.toISOString(), mondayLabel: fmtDate_(target), teachers: teachers };
   }
-  const key = 'parse3_' + week.id + '_' + week.modified + '_' + mapKey;
+  const key = 'parse4_' + week.id + '_' + week.modified + '_' + mapKey;
   const hit = getBig_(key);
   let parsed = hit ? JSON.parse(hit) : null;
   if (!parsed) {
@@ -237,6 +237,28 @@ function parseWeek_(fileId) {
     times.push({ r: r, mins: startHour * 60 - 30 + 30 * (r - firstRow) });
   }
 
+  // A school's offsite lessons sit in the unnumbered column immediately
+  // after Room 12. Some days repeat the day name there without a date;
+  // other days leave both header cells blank. These columns were previously
+  // skipped because they are not numbered classrooms.
+  // Only include a candidate if it actually contains coloured lesson text,
+  // so separator/decoration columns never become timetable entries.
+  cols.filter(col => col.room === '12').forEach(room12 => {
+    const c = room12.c + 1;
+    if (c >= lastCol || cols.some(col => col.c === c)) return;
+    const dayLabel = (text[dayRow][c] || '').trim();
+    const roomLabel = (text[roomRow][c] || '').trim();
+    if (dayLabel && dayLabel !== room12.day && !/^off[ -]?site$/i.test(dayLabel)) return;
+    if (/^\d+$/.test(roomLabel)) return; // another numbered room, not offsite
+    const hasLesson = times.some(t => {
+      const label = (text[t.r][c] || '').trim();
+      const colour = ((bg[t.r] || [])[c] || '#ffffff').toLowerCase();
+      return label && colour !== '#ffffff' && colour !== '#000000' &&
+        !/^\d{1,2}:\d{2}$/.test(label);
+    });
+    if (hasLesson) cols.push({ c: c, day: room12.day, room: '', offsite: true });
+  });
+
   const colourMap = readColourMap_();
   const unknown = {};
   const classes = [];
@@ -251,7 +273,8 @@ function parseWeek_(fileId) {
       if (keep) {
         classes.push(cur);
         if (!cur.teacher && !unknown[cur.colour]) {
-          unknown[cur.colour] = cur.day + ' ' + fmtMins_(cur.start) + ' room ' + cur.room +
+          unknown[cur.colour] = cur.day + ' ' + fmtMins_(cur.start) +
+            (cur.offsite ? ' offsite' : ' room ' + cur.room) +
             (cur.code ? ' "' + cur.code + '"' : '');
         }
       }
@@ -271,7 +294,8 @@ function parseWeek_(fileId) {
       close();
       const teacher = colourMap[colour];
       cur = {
-        day: col.day, room: col.room, start: t.mins, end: t.mins + 30,
+        day: col.day, room: col.room, offsite: !!col.offsite,
+        start: t.mins, end: t.mins + 30,
         code: cell, notes: [], colour: colour, teacher: teacher || null,
       };
     });
@@ -281,7 +305,7 @@ function parseWeek_(fileId) {
   logUnknownColours_(unknown);
   // Rooms per day, for the free-room finder (not every day has every room).
   const rooms = {};
-  cols.forEach(col => { if (col.room) (rooms[col.day] = rooms[col.day] || []).push(col.room); });
+  cols.forEach(col => { if (!col.offsite && col.room) (rooms[col.day] = rooms[col.day] || []).push(col.room); });
 
   return {
     // Every coloured block is returned, so free rooms can be worked out;
@@ -291,7 +315,8 @@ function parseWeek_(fileId) {
       const isOL = t => /^(o\.?\s?l\.?|online)$/i.test(t.trim());
       const online = isOL(k.code || '') || k.notes.some(isOL);
       return {
-        day: k.day, room: k.room, start: fmtMins_(k.start), end: fmtMins_(k.end),
+        day: k.day, room: k.room, offsite: !!k.offsite,
+        start: fmtMins_(k.start), end: fmtMins_(k.end),
         code: isOL(k.code || '') ? 'Online class' : (k.code || '(no label)'),
         notes: k.notes.filter(n => !isOL(n)).join(' / '),
         online: online,
@@ -503,7 +528,7 @@ function icsFeed_(teacher) {
         [teacher, utc(start), c.code, c.room].join('|'))).replace(/=+$/, '');
       lines.push('BEGIN:VEVENT', 'UID:' + uid + '@swift-timetable', 'DTSTAMP:' + stamp,
         'DTSTART:' + utc(start), 'DTEND:' + utc(end), 'SUMMARY:' + esc(c.code),
-        'LOCATION:' + esc(c.online ? 'Online' : 'Room ' + c.room));
+        'LOCATION:' + esc(c.online ? 'Online' : c.offsite ? 'Offsite' : 'Room ' + c.room));
       if (c.notes) lines.push('DESCRIPTION:' + esc(c.notes));
       lines.push('END:VEVENT');
     });
