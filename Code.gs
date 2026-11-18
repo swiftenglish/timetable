@@ -22,12 +22,15 @@ const GRID_TAB = 'TT';                             // tab name in each weekly fi
 const ALERT_ALSO = [];
 const COLOURS_TAB = 'Colours';                     // tab in THIS sheet: colour -> teacher
 const IGNORE = 'IGNORE';                           // not a teacher: hidden, but the room still counts as in use
-// These colours are Google Sheets visual artefacts in Rooms 1 and 3 only.
+// Lilac artefacts apply only to Rooms 1 and 3; grey applies to any room.
 // Unlike the IGNORE teacher, artefacts do NOT occupy a classroom or count as lessons.
-const DECORATIVE_COLOURS = ['#e5d8f6', '#d9d2e9'];
+const ROOM_DECORATIVE_COLOURS = ['#e5d8f6', '#d9d2e9'];
+const GLOBAL_DECORATIVE_COLOURS = ['#b7b7b7'];
 function isDecorativeCell_(room, colour) {
+  const hex = String(colour || '').trim().toLowerCase();
+  if (GLOBAL_DECORATIVE_COLOURS.includes(hex)) return true;
   return (String(room).trim() === '1' || String(room).trim() === '3') &&
-    DECORATIVE_COLOURS.includes(String(colour || '').trim().toLowerCase());
+    ROOM_DECORATIVE_COLOURS.includes(hex);
 }
 
 // Explicit course families, supplemented by flexible numbered-code recognition.
