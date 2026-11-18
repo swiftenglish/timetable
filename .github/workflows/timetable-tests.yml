@@ -17,4 +17,6 @@ jobs:
         with:
           node-version: '20'
       - name: Validate parser, lesson data and frontend scripts
-        run: node tests/timetable.test.cjs
+        run: |
+          node tests/timetable.test.cjs
+          node tests/change-alerts.test.cjs
