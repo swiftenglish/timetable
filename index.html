@@ -994,7 +994,7 @@
   }
 
   // ---------- helpers ----------
-  function classPlace(c) { return c.online ? 'Online' : c.offsite ? 'Offsite' : c.room ? 'Room ' + c.room : ''; }
+  function classPlace(c) { return c.offsite ? 'Offsite' : c.online ? 'Online' : c.room ? 'Room ' + c.room : ''; }
   function dayDate(res, i) { const d = new Date(res.mondayIso); d.setDate(d.getDate() + i); return d; }
   function byStart(list) { return list.slice().sort((a, b) => toMins(a.start) - toMins(b.start)); }
   function toMins(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }

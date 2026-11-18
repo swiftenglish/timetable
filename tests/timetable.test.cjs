@@ -41,6 +41,10 @@ block(6, 5, 6, 'B2 25', '#445566');
 block(27, 5, 7, 'IBC NNN', '#aa22ff');
 text[2][42] = 'WED';
 block(42, 5, 7, 'IBC 38', '#aa22ff');
+// IBC lessons remain offsite even when entered in numbered classroom columns.
+block(1, 8, 9, 'IBC 45', '#22ccaa');       // Room 1 column
+block(3, 12, 13, 'ibc NNN', '#aa22ff');   // Room 3 column, lower-case code
+block(11, 11, 12, 'IBCR 2', '#cc2299');   // Not IBC: still Room 11
 // Artefact lilac applies only in rooms 1 and 3; grey applies only offsite.
 block(1, 5, 6, 'A1 LILAC ARTIFACT', '#e5d8f6');
 block(3, 10, 11, 'B2 LILAC ARTIFACT', '#d9d2e9');
@@ -58,7 +62,7 @@ const names = {'#aa22ff': 'Teacher A', '#cc2299': 'Teacher B',
   '#b7b7b7': 'Teacher F'};
 let loggedUnknown = {};
 const api = vm.runInNewContext(isolatedCode +
-  '\n({parseWeek_,isClassCode_,looksLikeUnknownClassCode_,validateWeek_,isDecorativeCell_,isUncertainClass_});', {
+  '\n({parseWeek_,isClassCode_,looksLikeUnknownClassCode_,validateWeek_,isDecorativeCell_,isUncertainClass_,isIbcClassCode_});', {
   readGrid_: () => sheet, readColourMap_: () => names,
   logUnknownColours_: value => { loggedUnknown = value; }
 });
@@ -107,6 +111,20 @@ assert.equal(api.looksLikeUnknownClassCode_('SEM 16/11'), false);
 assert.equal(match('TUE', 'IBC NNN').offsite, true);
 assert.equal(match('WED', 'IBC 38').offsite, true);
 assert.equal(match('WED', 'IBC 38').room, '');
+for (const [code, teacher] of [['IBC 45', 'Teacher C'], ['ibc NNN', 'Teacher A']]) {
+  const c = match('MON', code);
+  assert.ok(c, code + ' should be parsed as a lesson');
+  assert.equal(c.offsite, true, code + ' should always be offsite');
+  assert.equal(c.room, '', code + ' must not occupy its sheet column room');
+  assert.equal(c.teacher, teacher);
+}
+assert.equal(match('MON', 'IBCR 2').offsite, false);
+assert.equal(match('MON', 'IBCR 2').room, '11');
+assert.equal(api.isIbcClassCode_('IBC'), true);
+assert.equal(api.isIbcClassCode_('IBC. 42'), true);
+assert.equal(api.isIbcClassCode_('IBCR 42'), false);
+assert.equal(api.isIbcClassCode_('XIBC 42'), false);
+assert.equal((week.rooms.MON || []).length, 12);
 assert.equal((week.rooms.TUE || []).length, 12);
 assert.equal((week.rooms.WED || []).length, 12);
 
@@ -117,7 +135,9 @@ assert.ok(checks.issues.some(x => x.kind === 'unassigned-colour'));
 assert.ok(checks.issues.some(x => x.kind === 'uncertain-class'));
 assert.ok(!checks.issues.some(x => x.kind === 'unassigned-colour' && x.message.includes('#d9ead3')));
 assert.equal(checks.stats.uncertain, 1);
-assert.equal(checks.stats.offsite, 2);
+assert.equal(checks.stats.offsite, 4);
+assert.ok(!checks.issues.some(x => x.kind === 'missing-room' && x.message.includes('IBC')),
+  'IBC lessons must not be diagnosed as missing a room');
 
 const conflicts = api.validateWeek_({
   parserWarnings: [],
@@ -148,6 +168,7 @@ assert.ok(!possible.issues.some(x => x.kind === 'room-overlap'));
 assert.equal(possible.errors, 0);
 assert.equal(possible.stats.unassigned, 0);
 assert.match(code, /c\.teacher === teacher && c\.status !== 'uncertain'/);
+assert.match(code, /c\.offsite \? 'Offsite' : c\.online \? 'Online'/);
 
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)];
@@ -156,6 +177,8 @@ for (const script of scripts) new vm.Script(script[1]);
 assert.match(html, /data-view="checks"/);
 assert.match(html, /function renderDayOverview/);
 assert.match(html, /function renderChecks/);
+assert.match(html, /function classPlace\(c\) \{ return c\.offsite \? 'Offsite'/);
+assert.match(html, /c\.day === day && !c\.offsite/);
 assert.match(html, /Cancelled \/ to confirm/);
 assert.match(html, /confirmed = list\.filter\(c => !isUncertain\(c\)\)/);
 console.log('PASS: class codes, offsite, green cancellation/confirmation, warnings, conflicts and frontend syntax.');

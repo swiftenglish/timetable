@@ -51,7 +51,7 @@ const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123',
 // week's and next week's files and keeps the result ready in the cache. The page
 // arrives with that data already inside it, so opening the app doesn't wait on
 // Drive or the timetable sheets.
-const SNAPSHOT_KEY = 'snapshot_v14';
+const SNAPSHOT_KEY = 'snapshot_v15';
 const CACHE_SECONDS = 6 * 60 * 60;   // the longest Apps Script allows
 
 function doGet(e) {
@@ -127,7 +127,7 @@ function buildWeek_(offset, weeks, teachers, mapKey) {
           day: '', time: '', room: '' }] }
     };
   }
-  const key = 'parse8_' + week.id + '_' + week.modified + '_' + mapKey;
+  const key = 'parse9_' + week.id + '_' + week.modified + '_' + mapKey;
   const hit = getBig_(key);
   let parsed = hit ? JSON.parse(hit) : null;
   if (!parsed) {
@@ -322,7 +322,7 @@ function parseWeek_(fileId) {
           // A plausible unfamiliar course label in the middle of a same-colour
           // block might be a missed new lesson: surface it rather than guessing.
           if (looksLikeUnknownClassCode_(cell)) parserWarnings.push({
-            day: col.day, time: fmtMins_(t.mins), room: col.offsite ? 'Offsite' : col.room,
+            day: col.day, time: fmtMins_(t.mins), room: cur.offsite ? 'Offsite' : cur.room,
             message: 'Possible new class code "' + cell + '" inside "' +
               (cur.code || 'unlabelled block') + '". Check whether this starts another lesson.'
           });
@@ -332,8 +332,10 @@ function parseWeek_(fileId) {
       }
       close();
       const teacher = colourMap[colour];
+      // IBC lessons are always offsite, regardless of the spreadsheet column.
+      const offsite = !!col.offsite || isIbcClassCode_(cell);
       cur = {
-        day: col.day, room: col.room, offsite: !!col.offsite,
+        day: col.day, room: offsite ? '' : col.room, offsite: offsite,
         start: t.mins, end: t.mins + 30,
         code: cell, notes: [], colour: colour, teacher: teacher || null,
         status: isUncertainClass_(colour) ? 'uncertain' : 'confirmed',
@@ -437,6 +439,9 @@ function setup() {
 }
 
 // ---------- Helpers ----------
+function isIbcClassCode_(cell) {
+  return /^IBC(?=$|[\s+.-])/i.test(String(cell || '').trim());
+}
 function isClassCode_(cell) {
   const s = String(cell || '').trim().replace(/\s+/g, ' ').toUpperCase();
   if (!s) return false;
@@ -677,7 +682,7 @@ function icsFeed_(teacher) {
         [teacher, utc(start), c.code, c.room].join('|'))).replace(/=+$/, '');
       lines.push('BEGIN:VEVENT', 'UID:' + uid + '@swift-timetable', 'DTSTAMP:' + stamp,
         'DTSTART:' + utc(start), 'DTEND:' + utc(end), 'SUMMARY:' + esc(c.code),
-        'LOCATION:' + esc(c.online ? 'Online' : c.offsite ? 'Offsite' : 'Room ' + c.room));
+        'LOCATION:' + esc(c.offsite ? 'Offsite' : c.online ? 'Online' : 'Room ' + c.room));
       if (c.notes) lines.push('DESCRIPTION:' + esc(c.notes));
       lines.push('END:VEVENT');
     });
