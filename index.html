@@ -30,7 +30,7 @@
   .logo { display: block; margin: 4px 0 18px; }
   .logo img { display: block; height: 56px; width: auto; }
 
-  .views { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px;
+  .views { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 4px;
            background: var(--surface); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 18px; }
   .views button { font: inherit; font-size: 15px; color: var(--muted); background: none; border: 0;
                   border-radius: 9px; padding: 10px 4px; min-height: 44px; cursor: pointer; }
@@ -221,6 +221,47 @@
   @media (prefers-reduced-motion: reduce) {
     .views button { transition: none; }
   }
+
+  /* Daily teaching overview */
+  .day-overview { margin: 16px 0 18px; padding: 16px; border: 1px solid var(--line);
+                  border-radius: 14px; background: var(--surface); }
+  .day-overview h2 { font-size: 17px; margin: 0 0 12px; }
+  .day-overview h3 { font-size: 14px; margin: 15px 0 7px; }
+  .day-facts { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; }
+  .day-fact { min-width: 0; padding: 11px 8px; border-radius: 9px; background: var(--paper); }
+  .day-fact span { display: block; color: var(--muted); font-size: 11px; }
+  .day-fact strong { display: block; margin-top: 3px; font-size: 17px; font-variant-numeric: tabular-nums; }
+  .day-places { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 11px; }
+  .day-places p { margin: 0; padding: 10px 11px; border: 1px solid var(--line); border-radius: 9px; }
+  .day-places span { display: block; font-size: 12px; color: var(--muted); }
+  .day-places strong { font-size: 14px; }
+  .day-gaps { padding-left: 19px; margin: 0; font-size: 14px; }
+  .day-gaps li { padding: 3px 0; }
+  .no-gaps { color: var(--muted); font-size: 14px; margin: 0; }
+  /* Shared timetable validation screen */
+  .check-summary { margin-top: 16px; padding: 16px; background: var(--surface);
+                   border: 1px solid var(--line); border-radius: 14px; }
+  .check-summary h2 { font-size: 19px; margin: 0 0 6px; }
+  .check-summary p { margin: 7px 0; color: var(--muted); font-size: 14px; }
+  .check-numbers { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin: 12px 0; }
+  .check-numbers div { border-radius: 8px; background: var(--paper); text-align: center; padding: 12px 5px; }
+  .check-numbers strong { display: block; font-size: 23px; line-height: 1.2; }
+  .check-numbers span { display: block; font-size: 12px; color: var(--muted); }
+  .check-issues { margin-top: 20px; }
+  .check-issues h2 { font-size: 17px; margin: 0 0 10px; }
+  .check-item { border: 1px solid var(--line); background: var(--surface);
+                border-radius: 10px; padding: 13px; margin-bottom: 8px; }
+  .check-item strong { display: block; font-size: 14px; }
+  .check-item p { font-size: 14px; margin: 5px 0; overflow-wrap: anywhere; }
+  .check-item small { display: block; color: var(--muted); margin-top: 5px; }
+  .check-item.error { border-left: 4px solid #bf564a; }
+  .check-item.warning { border-left: 4px solid #c09339; }
+  .check-note { color: var(--muted); font-size: 13px; line-height: 1.45; margin: 16px 2px; }
+  @media(max-width: 450px) {
+    .views button { font-size: 13px; padding: 10px 2px; }
+    .day-fact { padding: 10px 6px; }
+    .day-fact strong { font-size: 15px; }
+  }
 </style>
 </head>
 <body>
@@ -234,6 +275,7 @@
     <button data-view="week" aria-pressed="true">My week</button>
     <button data-view="today" aria-pressed="false">Today</button>
     <button data-view="rooms" aria-pressed="false">Free rooms</button>
+    <button data-view="checks" aria-pressed="false">Checks</button>
   </div>
   <div class="syncbar warn" id="syncBar" role="status" aria-live="polite">
     <span class="sync-label"><span class="sync-dot" aria-hidden="true"></span><span id="syncStatus">Checking timetable…</span></span>
@@ -540,7 +582,12 @@
     $('weekDisplay').hidden = view !== 'week';
     document.querySelector('.wrap').classList.toggle('wide', view === 'week' && weekMode === 'calendar');
     syncWeekMode();
-    if (view === 'rooms') { $('calBtn').hidden = true; $('calPanel').hidden = true; return renderRooms(res); }
+    if (view === 'rooms' || view === 'checks') {
+      $('calBtn').hidden = true;
+      $('calPanel').hidden = true;
+      if (view === 'checks') { sel.hidden = true; return renderChecks(res); }
+      return renderRooms(res);
+    }
 
     const me = sel.value;
     $('title').textContent = me || 'Your timetable';
@@ -698,13 +745,101 @@
         '</h2><p>' + (list.length ? 'Your teaching day is complete.' : 'You have no scheduled lessons today.') +
         '</p></section>';
     }
-    out.innerHTML = changeSummary(ch) + hero +
+    out.innerHTML = changeSummary(ch) + hero + renderDayOverview(list, nowM) +
       (list.length ? '<section class="day"><h2>Today’s lessons</h2>' +
         list.map((c) => {
           const s = toMins(c.start), e = toMins(c.end);
           const state = e <= nowM ? 'past' : s <= nowM ? 'now' : c === next ? 'next' : '';
           return row(c, state, ch.marks.get(c));
         }).join('') + '</section>' : '');
+  }
+
+
+  function renderDayOverview(list, nowM) {
+    if (!list.length) return '';
+    const sorted = byStart(list);
+    const first = Math.min(...sorted.map(c => toMins(c.start)));
+    const last = Math.max(...sorted.map(c => toMins(c.end)));
+    const total = sorted.reduce((n, c) => n + Math.max(0, toMins(c.end) - toMins(c.start)), 0);
+    const current = sorted.find(c => toMins(c.start) <= nowM && toMins(c.end) > nowM);
+    const next = sorted.find(c => toMins(c.start) > nowM);
+    const gaps = [];
+    let latestEnd = toMins(sorted[0].end);
+    sorted.slice(1).forEach(c => {
+      const start = toMins(c.start), end = toMins(c.end);
+      if (start > latestEnd) gaps.push({ start: latestEnd, end: start });
+      latestEnd = Math.max(latestEnd, end);
+    });
+    const facts = [
+      ['First lesson', fmtTime(first)],
+      ['Finish', fmtTime(last)],
+      ['Teaching', fmtHours(total)]
+    ];
+    return '<section class="day-overview" aria-label="Daily teaching overview">' +
+      '<h2>Your day at a glance</h2>' +
+      '<div class="day-facts">' + facts.map(([label, value]) =>
+        '<div class="day-fact"><span>' + label + '</span><strong>' + esc(value) +
+        '</strong></div>').join('') + '</div>' +
+      '<div class="day-places"><p><span>Current classroom</span><strong>' +
+        esc(current ? classPlace(current) : 'Not teaching now') +
+        '</strong></p><p><span>Next classroom</span><strong>' +
+        esc(next ? classPlace(next) : 'No more lessons') +
+        '</strong></p></div>' +
+      '<h3>Free periods between classes</h3>' +
+      (gaps.length ? '<ul class="day-gaps">' + gaps.map(g =>
+        '<li>' + fmtTime(g.start) + '–' + fmtTime(g.end) + ' · ' +
+        durationText(g.end - g.start) + '</li>').join('') + '</ul>' :
+        '<p class="no-gaps">No free periods between scheduled lessons.</p>') +
+      '</section>';
+  }
+
+  function renderChecks(res) {
+    $('title').textContent = 'Timetable checks';
+    $('sub').textContent = 'Week of ' + res.mondayLabel;
+    if (!res.validation) {
+      out.innerHTML = '<section class="check-summary"><h2>Checks not yet available</h2>' +
+        '<p>Deploy the latest Code.gs in Google Apps Script to enable timetable validation.</p>' +
+        '</section>';
+      return;
+    }
+    const v = res.validation, stats = v.stats || {};
+    const errors = Number(v.errors || 0), warnings = Number(v.warnings || 0);
+    const checks = Array.isArray(v.issues) ? v.issues : [];
+    const headline = errors ? 'Problems need attention' : warnings ? 'Review recommended' : 'No issues detected';
+    const numbers = [
+      ['Errors', errors],
+      ['Warnings', warnings],
+      ['Class blocks', stats.total || 0]
+    ];
+    let html = '<section class="check-summary"><h2>' + headline + '</h2>' +
+      '<p>Automated checks for the selected week. Review warnings against the original spreadsheet.</p>' +
+      '<div class="check-numbers">' + numbers.map(([label, number]) =>
+        '<div><strong>' + number + '</strong><span>' + label + '</span></div>').join('') +
+      '</div><p>' + (stats.teachers || 0) + ' assigned teachers · ' +
+      (stats.unassigned || 0) + ' unmapped class blocks · ' +
+      (stats.offsite || 0) + ' offsite blocks</p></section>';
+    if (checks.length) {
+      html += '<section class="check-issues"><h2>Items to check</h2>' +
+        checks.map(issue => {
+          const severity = issue.severity === 'error' ? 'error' : 'warning';
+          const when = [issue.day, issue.time, issue.room && issue.room !== 'Offsite' ?
+            'Room ' + issue.room : issue.room].filter(Boolean).join(' · ');
+          return '<article class="check-item ' + severity + '"><strong>' +
+            (severity === 'error' ? 'Error' : 'Warning') + '</strong><p>' +
+            esc(issue.message || '') + '</p>' + (when ? '<small>' + esc(when) + '</small>' : '') +
+            '</article>';
+        }).join('') + '</section>';
+    } else {
+      html += '<p class="no-gaps" style="margin-top:16px">No validation items for this week.</p>';
+    }
+    if (Number(v.total || checks.length) > checks.length) {
+      html += '<p class="check-note">Showing the first ' + checks.length +
+        ' issues out of ' + Number(v.total) + '.</p>';
+    }
+    html += '<p class="check-note">These checks do not prove that every class is correct. ' +
+      'In particular, unfamiliar labels and unusual spreadsheet layouts may need manual review. ' +
+      'Fix the source Google Sheet; this screen is read-only.</p>';
+    out.innerHTML = html;
   }
 
   function resetRoomPickers(preserve) {
