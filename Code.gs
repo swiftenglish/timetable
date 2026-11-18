@@ -22,14 +22,15 @@ const GRID_TAB = 'TT';                             // tab name in each weekly fi
 const ALERT_ALSO = [];
 const COLOURS_TAB = 'Colours';                     // tab in THIS sheet: colour -> teacher
 const IGNORE = 'IGNORE';                           // not a teacher: hidden, but the room still counts as in use
-// Lilac artefacts apply only to Rooms 1 and 3; grey applies to any room.
+// Lilac artefacts apply only to Rooms 1 and 3; grey applies only to offsite columns.
+// A matching colour in any other place may represent a real class.
 // Unlike the IGNORE teacher, artefacts do NOT occupy a classroom or count as lessons.
 const ROOM_DECORATIVE_COLOURS = ['#e5d8f6', '#d9d2e9'];
-const GLOBAL_DECORATIVE_COLOURS = ['#b7b7b7'];
-function isDecorativeCell_(room, colour) {
+const OFFSITE_DECORATIVE_COLOURS = ['#b7b7b7'];
+function isDecorativeCell_(room, colour, offsite) {
   const hex = String(colour || '').trim().toLowerCase();
-  if (GLOBAL_DECORATIVE_COLOURS.includes(hex)) return true;
-  return (String(room).trim() === '1' || String(room).trim() === '3') &&
+  if (offsite && OFFSITE_DECORATIVE_COLOURS.includes(hex)) return true;
+  return !offsite && (String(room).trim() === '1' || String(room).trim() === '3') &&
     ROOM_DECORATIVE_COLOURS.includes(hex);
 }
 
@@ -44,7 +45,7 @@ const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123',
 // week's and next week's files and keeps the result ready in the cache. The page
 // arrives with that data already inside it, so opening the app doesn't wait on
 // Drive or the timetable sheets.
-const SNAPSHOT_KEY = 'snapshot_v12';
+const SNAPSHOT_KEY = 'snapshot_v13';
 const CACHE_SECONDS = 6 * 60 * 60;   // the longest Apps Script allows
 
 function doGet(e) {
@@ -120,7 +121,7 @@ function buildWeek_(offset, weeks, teachers, mapKey) {
           day: '', time: '', room: '' }] }
     };
   }
-  const key = 'parse6_' + week.id + '_' + week.modified + '_' + mapKey;
+  const key = 'parse7_' + week.id + '_' + week.modified + '_' + mapKey;
   const hit = getBig_(key);
   let parsed = hit ? JSON.parse(hit) : null;
   if (!parsed) {
@@ -271,7 +272,7 @@ function parseWeek_(fileId) {
       const label = (text[t.r][c] || '').trim();
       const colour = ((bg[t.r] || [])[c] || '#ffffff').toLowerCase();
       return label && colour !== '#ffffff' && colour !== '#000000' &&
-        !/^\d{1,2}:\d{2}$/.test(label);
+        !isDecorativeCell_('', colour, true) && !/^\d{1,2}:\d{2}$/.test(label);
     });
     if (hasLesson) cols.push({ c: c, day: room12.day, room: '', offsite: true });
   });
@@ -303,7 +304,7 @@ function parseWeek_(fileId) {
       const cell = text[t.r][col.c].replace(/\s+/g, ' ').trim();
       // Treat these formatting-only cells exactly like empty space, so they
       // neither extend a lesson nor create one or block the Free Rooms finder.
-      if (colour === '#ffffff' || isDecorativeCell_(col.room, colour)) {
+      if (colour === '#ffffff' || isDecorativeCell_(col.room, colour, !!col.offsite)) {
         close();
         return;
       }
