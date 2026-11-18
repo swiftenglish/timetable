@@ -41,16 +41,19 @@ block(6, 5, 6, 'B2 25', '#445566');
 block(27, 5, 7, 'IBC NNN', '#aa22ff');
 text[2][42] = 'WED';
 block(42, 5, 7, 'IBC 38', '#aa22ff');
-// Artefact lilac applies only in rooms 1 and 3. Artefact grey applies everywhere.
+// Artefact lilac applies only in rooms 1 and 3; grey applies only offsite.
 block(1, 5, 6, 'A1 LILAC ARTIFACT', '#e5d8f6');
 block(3, 10, 11, 'B2 LILAC ARTIFACT', '#d9d2e9');
-block(7, 5, 6, 'C1 GREY ARTIFACT', '#b7b7b7');
+block(7, 5, 6, 'C1 GREY CLASS', '#b7b7b7');
+block(27, 10, 11, 'GREY OFFSITE ARTIFACT', '#b7b7b7');
+block(42, 10, 11, 'GREY OFFSITE WED', '#b7b7b7');
 // Real classes in other rooms must still work with these two lilac colours.
 block(2, 5, 6, 'A2 REAL', '#e5d8f6');
 block(9, 5, 6, 'C2 REAL', '#d9d2e9');
 const sheet = {text, bg};
 const names = {'#aa22ff': 'Teacher A', '#cc2299': 'Teacher B',
-  '#22ccaa': 'Teacher C', '#e5d8f6': 'Teacher D', '#d9d2e9': 'Teacher E'};
+  '#22ccaa': 'Teacher C', '#e5d8f6': 'Teacher D', '#d9d2e9': 'Teacher E',
+  '#b7b7b7': 'Teacher F'};
 const api = vm.runInNewContext(isolatedCode +
   '\n({parseWeek_,isClassCode_,looksLikeUnknownClassCode_,validateWeek_,isDecorativeCell_});', {
   readGrid_: () => sheet, readColourMap_: () => names, logUnknownColours_: () => {}
@@ -68,17 +71,21 @@ for (const [code, start, end] of [
   assert.equal(c.end, end);
 }
 assert.equal(week.classes.filter(c => c.room === '3').length, 2);
-for (const label of ['A1 LILAC ARTIFACT', 'B2 LILAC ARTIFACT', 'C1 GREY ARTIFACT']) {
+for (const label of ['A1 LILAC ARTIFACT', 'B2 LILAC ARTIFACT',
+  'GREY OFFSITE ARTIFACT', 'GREY OFFSITE WED']) {
   assert.equal(match('MON', label), undefined, label + ' must be ignored');
 }
 assert.equal(match('MON', 'A2 REAL').room, '2');
 assert.equal(match('MON', 'C2 REAL').room, '9');
+assert.equal(match('MON', 'C1 GREY CLASS').room, '7');
 assert.equal(api.isDecorativeCell_('1', '#E5D8F6'), true);
 assert.equal(api.isDecorativeCell_('3', '#D9D2E9'), true);
 assert.equal(api.isDecorativeCell_('2', '#e5d8f6'), false);
 assert.equal(api.isDecorativeCell_('9', '#d9d2e9'), false);
-assert.equal(api.isDecorativeCell_('12', '#B7B7B7'), true);
-assert.equal(api.isDecorativeCell_('Offsite', '#b7b7b7'), true);
+assert.equal(api.isDecorativeCell_('12', '#B7B7B7', false), false);
+assert.equal(api.isDecorativeCell_('1', '#b7b7b7', false), false);
+assert.equal(api.isDecorativeCell_('', '#B7B7B7', true), true);
+assert.equal(api.isDecorativeCell_('', '#e5d8f6', true), false);
 assert.equal(api.isClassCode_('127 TEST'), true);
 assert.equal(api.isClassCode_('C1+ 66'), true);
 assert.equal(api.isClassCode_('1234'), false);
