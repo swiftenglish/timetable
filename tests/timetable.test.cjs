@@ -159,9 +159,12 @@ assert.ok(checks.issues.some(x => x.kind === 'unassigned-colour'));
 for(const hex of ['#e5d8f6', '#d9d2e9', '#b7b7b7'])
   assert.ok(checks.issues.some(x => x.kind === 'unassigned-colour' &&
     x.message.includes(hex)), 'scoped colour should be reviewable outside scope: '+hex);
-assert.ok(checks.issues.some(x => x.kind === 'uncertain-class'));
+assert.ok(!checks.issues.some(x => x.kind === 'uncertain-class'),
+  'green blocks must not generate individual validation warnings');
 assert.ok(!checks.issues.some(x => x.kind === 'unassigned-colour' && x.message.includes('#d9ead3')));
 assert.equal(checks.stats.uncertain, 1);
+assert.equal(checks.total, checks.errors + checks.warnings,
+  'warning totals must exclude tracked green statuses');
 assert.equal(checks.stats.offsite, 5);
 assert.ok(!checks.issues.some(x => x.kind === 'missing-room' && x.message.includes('IBC')),
   'IBC lessons must not be diagnosed as missing a room');
@@ -194,6 +197,19 @@ assert.ok(possible.issues.some(x => x.kind === 'possible-overlap'));
 assert.ok(!possible.issues.some(x => x.kind === 'room-overlap'));
 assert.equal(possible.errors, 0);
 assert.equal(possible.stats.unassigned, 0);
+assert.equal(possible.warnings, 1, 'overlap warning still counts even with green blocks');
+const greenOnly = api.validateWeek_({
+  parserWarnings: [], classes: Array.from({length: 140}, (_, i) => ({
+    day: 'MON', code: 'GREEN ' + i, room: String(i + 1),
+    start: '09:00', end: '09:30', teacher: null, ignored: false,
+    status: 'uncertain', colour: '#d9ead3'
+  }))
+});
+assert.equal(greenOnly.stats.uncertain, 140);
+assert.equal(greenOnly.warnings, 0);
+assert.equal(greenOnly.errors, 0);
+assert.equal(greenOnly.total, 0);
+assert.equal(greenOnly.issues.length, 0);
 assert.match(code, /c\.teacher === teacher && c\.status !== 'uncertain'/);
 assert.ok(!code.includes("colour !== '#000000'"), 'black must not be excluded from offsite candidate detection');
 assert.match(code, /c\.offsite \? 'Offsite' : c\.online \? 'Online'/);
