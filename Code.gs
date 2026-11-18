@@ -27,6 +27,16 @@ const IGNORE = 'IGNORE';                           // not a teacher: hidden, but
 // Unlike the IGNORE teacher, artefacts do NOT occupy a classroom or count as lessons.
 const ROOM_DECORATIVE_COLOURS = ['#e5d8f6', '#d9d2e9'];
 const OFFSITE_DECORATIVE_COLOURS = ['#b7b7b7'];
+const SCOPED_DECORATIVE_COLOURS = ROOM_DECORATIVE_COLOURS.concat(OFFSITE_DECORATIVE_COLOURS);
+// Colour-map IGNORE is global for ordinary ignore colours, but these three
+// entries must only be ignored at their specified locations. Elsewhere, retain
+// the lesson and request an explicit teacher assignment rather than hiding it.
+function resolveTeacherColour_(colour, location, map) {
+  const mapped = map[colour] || null;
+  if (mapped === IGNORE && SCOPED_DECORATIVE_COLOURS.includes(colour) &&
+      !isDecorativeCell_(location.room, colour, !!location.offsite)) return null;
+  return mapped;
+}
 // This green colour covers lessons that are cancelled OR awaiting confirmation.
 // The colour alone cannot distinguish which. Never report it as confirmed.
 const UNCERTAIN_CLASS_COLOUR = '#d9ead3';
@@ -51,7 +61,7 @@ const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123',
 // week's and next week's files and keeps the result ready in the cache. The page
 // arrives with that data already inside it, so opening the app doesn't wait on
 // Drive or the timetable sheets.
-const SNAPSHOT_KEY = 'snapshot_v15';
+const SNAPSHOT_KEY = 'snapshot_v16';
 const CACHE_SECONDS = 6 * 60 * 60;   // the longest Apps Script allows
 
 function doGet(e) {
@@ -127,7 +137,7 @@ function buildWeek_(offset, weeks, teachers, mapKey) {
           day: '', time: '', room: '' }] }
     };
   }
-  const key = 'parse9_' + week.id + '_' + week.modified + '_' + mapKey;
+  const key = 'parse10_' + week.id + '_' + week.modified + '_' + mapKey;
   const hit = getBig_(key);
   let parsed = hit ? JSON.parse(hit) : null;
   if (!parsed) {
@@ -277,7 +287,7 @@ function parseWeek_(fileId) {
     const hasLesson = times.some(t => {
       const label = (text[t.r][c] || '').trim();
       const colour = ((bg[t.r] || [])[c] || '#ffffff').toLowerCase();
-      return label && colour !== '#ffffff' && colour !== '#000000' &&
+      return label && colour !== '#ffffff' &&
         !isDecorativeCell_('', colour, true) && !/^\d{1,2}:\d{2}$/.test(label);
     });
     if (hasLesson) cols.push({ c: c, day: room12.day, room: '', offsite: true });
@@ -331,11 +341,12 @@ function parseWeek_(fileId) {
         return;
       }
       close();
-      const teacher = colourMap[colour];
       // IBC lessons are always offsite, regardless of the spreadsheet column.
       const offsite = !!col.offsite || isIbcClassCode_(cell);
+      const room = offsite ? '' : col.room;
+      const teacher = resolveTeacherColour_(colour, { room: room, offsite: offsite }, colourMap);
       cur = {
-        day: col.day, room: offsite ? '' : col.room, offsite: offsite,
+        day: col.day, room: room, offsite: offsite,
         start: t.mins, end: t.mins + 30,
         code: cell, notes: [], colour: colour, teacher: teacher || null,
         status: isUncertainClass_(colour) ? 'uncertain' : 'confirmed',
@@ -378,7 +389,12 @@ function readColourMap_() {
   const map = {};
   if (!sh || sh.getLastRow() < 2) return map;
   sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(([hex, name]) => {
-    if (hex && name) map[String(hex).toLowerCase().trim()] = String(name).trim();
+    if (hex && name) {
+      const key = String(hex).toLowerCase().trim();
+      // Preserve the first recorded assignment when duplicate hex rows appear;
+      // report conflicts in the sheet rather than silently overriding a teacher.
+      if (!(key in map)) map[key] = String(name).trim();
+    }
   });
   return map;
 }
