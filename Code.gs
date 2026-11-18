@@ -27,6 +27,12 @@ const IGNORE = 'IGNORE';                           // not a teacher: hidden, but
 // Unlike the IGNORE teacher, artefacts do NOT occupy a classroom or count as lessons.
 const ROOM_DECORATIVE_COLOURS = ['#e5d8f6', '#d9d2e9'];
 const OFFSITE_DECORATIVE_COLOURS = ['#b7b7b7'];
+// This green colour covers lessons that are cancelled OR awaiting confirmation.
+// The colour alone cannot distinguish which. Never report it as confirmed.
+const UNCERTAIN_CLASS_COLOUR = '#d9ead3';
+function isUncertainClass_(colour) {
+  return String(colour || '').trim().toLowerCase() === UNCERTAIN_CLASS_COLOUR;
+}
 function isDecorativeCell_(room, colour, offsite) {
   const hex = String(colour || '').trim().toLowerCase();
   if (offsite && OFFSITE_DECORATIVE_COLOURS.includes(hex)) return true;
@@ -45,7 +51,7 @@ const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123',
 // week's and next week's files and keeps the result ready in the cache. The page
 // arrives with that data already inside it, so opening the app doesn't wait on
 // Drive or the timetable sheets.
-const SNAPSHOT_KEY = 'snapshot_v13';
+const SNAPSHOT_KEY = 'snapshot_v14';
 const CACHE_SECONDS = 6 * 60 * 60;   // the longest Apps Script allows
 
 function doGet(e) {
@@ -121,7 +127,7 @@ function buildWeek_(offset, weeks, teachers, mapKey) {
           day: '', time: '', room: '' }] }
     };
   }
-  const key = 'parse7_' + week.id + '_' + week.modified + '_' + mapKey;
+  const key = 'parse8_' + week.id + '_' + week.modified + '_' + mapKey;
   const hit = getBig_(key);
   let parsed = hit ? JSON.parse(hit) : null;
   if (!parsed) {
@@ -291,7 +297,7 @@ function parseWeek_(fileId) {
       const keep = cur.code || cur.notes.length || cur.end - cur.start > 30;
       if (keep) {
         classes.push(cur);
-        if (!cur.teacher && !unknown[cur.colour]) {
+        if (!cur.teacher && !isUncertainClass_(cur.colour) && !unknown[cur.colour]) {
           unknown[cur.colour] = cur.day + ' ' + fmtMins_(cur.start) +
             (cur.offsite ? ' offsite' : ' room ' + cur.room) +
             (cur.code ? ' "' + cur.code + '"' : '');
@@ -330,6 +336,7 @@ function parseWeek_(fileId) {
         day: col.day, room: col.room, offsite: !!col.offsite,
         start: t.mins, end: t.mins + 30,
         code: cell, notes: [], colour: colour, teacher: teacher || null,
+        status: isUncertainClass_(colour) ? 'uncertain' : 'confirmed',
       };
     });
     close();
@@ -354,7 +361,7 @@ function parseWeek_(fileId) {
         notes: k.notes.filter(n => !isOL(n)).join(' / '),
         online: online,
         colour: k.colour, teacher: k.teacher === IGNORE ? null : k.teacher,
-        ignored: k.teacher === IGNORE,
+        ignored: k.teacher === IGNORE, status: k.status || 'confirmed',
       };
     }),
     rooms: rooms,
@@ -464,7 +471,12 @@ function validateWeek_(parsed) {
   const mins = t => { const p = String(t || '').split(':').map(Number); return p[0] * 60 + p[1]; };
   const unknown = {};
   classes.forEach(c => {
-    if (!c.ignored && !c.teacher && !unknown[c.colour || 'unknown']) {
+    if (c.status === 'uncertain') {
+      push('warning', 'uncertain-class',
+        'The green block "' + c.code + '" may be cancelled or awaiting confirmation. ' +
+        'The colour alone cannot tell which; confirm with the original timetable.', c);
+    }
+    if (!c.ignored && c.status !== 'uncertain' && !c.teacher && !unknown[c.colour || 'unknown']) {
       unknown[c.colour || 'unknown'] = true;
       push('warning', 'unassigned-colour',
         'Unassigned timetable colour ' + (c.colour || '(missing)') + ': lessons using it are hidden from teachers.',
@@ -496,6 +508,16 @@ function validateWeek_(parsed) {
         if (mins(a.start) >= mins(b.end) || mins(b.start) >= mins(a.end)) continue;
         const interval = [a.start, b.start].sort((x, y) => mins(x) - mins(y))[1] +
           '–' + [a.end, b.end].sort((x, y) => mins(x) - mins(y))[0];
+        // An uncertain block is not a confirmed clash; flag possible overlap only.
+        if (a.status === 'uncertain' || b.status === 'uncertain') {
+          if ((a.teacher && a.teacher === b.teacher) ||
+              (!a.offsite && !b.offsite && !a.online && !b.online && a.room && a.room === b.room)) {
+            push('warning', 'possible-overlap',
+              'A cancelled/to-confirm block "' + a.code + '" or "' + b.code +
+              '" overlaps another block (' + interval + '). Confirm before using the room.', a);
+          }
+          continue;
+        }
         // Same teacher in two classes at once: a conflict even if rooms differ.
         if (a.teacher && a.teacher === b.teacher) {
           push('error', 'teacher-overlap',
@@ -520,8 +542,9 @@ function validateWeek_(parsed) {
     stats: {
       total: classes.length,
       teachers: [...new Set(classes.map(c => c.teacher).filter(Boolean))].length,
-      unassigned: classes.filter(c => !c.teacher && !c.ignored).length,
-      offsite: classes.filter(c => c.offsite).length
+      unassigned: classes.filter(c => !c.teacher && !c.ignored && c.status !== 'uncertain').length,
+      offsite: classes.filter(c => c.offsite).length,
+      uncertain: classes.filter(c => c.status === 'uncertain').length
     }
   };
 }
