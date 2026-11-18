@@ -429,10 +429,10 @@
   // ---------- changes since last visit ----------
   // Each teacher's classes for each week are remembered on this device. Next time,
   // anything new, moved or removed is marked. Marks stay for the whole visit.
-  const sig = c => [c.day, c.start, c.end, c.room, c.online ? 'OL' : '', c.code, c.notes || ''].join('|');
+  const sig = c => [c.day, c.start, c.end, c.room, c.online ? 'OL' : '', c.offsite ? 'OFFSITE' : '', c.code, c.notes || ''].join('|');
   const storedClass = c => ({
     day: c.day, start: c.start, end: c.end, room: c.room,
-    online: !!c.online, code: c.code, notes: c.notes || ''
+    online: !!c.online, offsite: !!c.offsite, code: c.code, notes: c.notes || ''
   });
   function seenKey(res, me) { return 'seen:' + me + ':' + res.mondayIso; }
   function changesFor(res, me, mine) {
@@ -458,7 +458,8 @@
       const p = left.splice(i, 1)[0], was = [];
       if (p.day !== c.day) was.push(p.day);
       if (p.start !== c.start || p.end !== c.end) was.push(p.start + '–' + p.end);
-      if (p.room !== c.room || !!p.online !== !!c.online) was.push(p.online ? 'online' : 'Room ' + p.room);
+      if (p.room !== c.room || !!p.online !== !!c.online || !!p.offsite !== !!c.offsite)
+        was.push(classPlace(p));
       if ((p.notes || '') !== (c.notes || '')) was.push('notes updated');
       d.marks.set(c, { kind: 'Changed', was: was.join(' · ') });
     });
@@ -470,7 +471,7 @@
     if (!ch.count) return '';
     const lines = [];
     ch.marks.forEach((m, c) => {
-      const target = c.online ? 'online' : 'Room ' + c.room;
+      const target = classPlace(c);
       lines.push('<li><b>' + esc(c.code) + '</b> · ' + esc(c.day) + ' ' + esc(c.start) + ' · ' +
         esc(target) + (m.kind === 'New' ? ' <b>New</b>' : ' <b>Changed</b>' +
           (m.was ? '<div>Previously: ' + esc(m.was) + '</div>' : '')) + '</li>');
@@ -627,7 +628,7 @@
         const top = Math.round((start - first) * pxPerMin) + 2;
         const height = Math.max(19, Math.round((end - start) * pxPerMin) - 4);
         const left = (lane / count) * 100, width = 100 / count;
-        const place = c.online ? 'Online' : (c.room ? 'Room ' + c.room : '');
+        const place = classPlace(c);
         const mark = changes.marks.get(c);
         const altered = mark ? ' changed' : '';
         const past = dayDate(res, i).getTime() < new Date().setHours(0, 0, 0, 0) ||
@@ -689,7 +690,7 @@
         (current ? 'Ends in ' + durationText(toMins(c.end) - nowM) :
           'Starts in ' + durationText(toMins(c.start) - nowM)) + '</div>' +
         '<p class="detail">' + esc(c.start) + '–' + esc(c.end) + ' · ' +
-        (c.online ? 'Online' : 'Room ' + esc(c.room)) + '</p>' +
+        esc(classPlace(c)) + '</p>' +
         (c.notes ? '<p>' + esc(c.notes) + '</p>' : '') + '</section>';
     } else {
       hero = '<section class="feature"><span class="eyebrow">' + (list.length ? 'All done' : 'Your day') +
@@ -737,7 +738,7 @@
     const end = t + duration;
     const close = toMins(res.slots[res.slots.length - 1]) + 30;
     const rooms = [...new Set(res.rooms[day] || [])];
-    const used = res.classes.filter(c => c.day === day);
+    const used = res.classes.filter(c => c.day === day && !c.offsite);
     const free = rooms.map(r => {
       const inRoom = used.filter(c => c.room === r);
       // A room is usable only when every minute of the chosen interval is free.
@@ -762,7 +763,7 @@
     let tag = state === 'now' ? '<span class="tag">Now</span>' : state === 'next' ? '<span class="tag">Next</span>' : '';
     if (c.removed) tag = '<span class="tag chg">Removed</span>';
     else if (mark) tag += '<span class="tag chg">' + mark.kind + '</span>';
-    const place = c.online ? 'Online' : c.room ? 'Room ' + esc(c.room) : '';
+    const place = esc(classPlace(c));
     const meta = [place, mark && mark.was ? esc(mark.was) : '', c.removed ? '' : esc(c.notes || '')].filter(Boolean).join(' · ');
     const cls = 'cls' + (state === 'past' ? ' past' : state === 'now' ? ' now' : state === 'next' ? ' next' : '') + (c.removed ? ' removed' : '');
     return '<div class="' + cls + '"><div class="time">' + c.start + '<span>' + c.end + '</span></div>' +
@@ -771,6 +772,7 @@
   }
 
   // ---------- helpers ----------
+  function classPlace(c) { return c.online ? 'Online' : c.offsite ? 'Offsite' : c.room ? 'Room ' + c.room : ''; }
   function dayDate(res, i) { const d = new Date(res.mondayIso); d.setDate(d.getDate() + i); return d; }
   function byStart(list) { return list.slice().sort((a, b) => toMins(a.start) - toMins(b.start)); }
   function toMins(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
