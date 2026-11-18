@@ -515,9 +515,15 @@
   }
   function teacherLessons(res, me) {
     const direct = res.classes.filter(c => c.teacher === me);
+    // The server can recognise an exact previously confirmed class on any
+    // device. It never guesses the owner of an ambiguous green lesson.
+    const sharedGreen = res.classes.filter(c =>
+      isUncertain(c) && !c.teacher && c.previousTeacher === me)
+      .map(c => ({...c, teacher:me, matchedFromPrevious:true, matchedFromServer:true}));
     const previous = previousLessons(res, me);
-    if (!previous) return direct;
-    const green = res.classes.filter(c => isUncertain(c) && !c.teacher);
+    if (!previous) return direct.concat(sharedGreen);
+    const green = res.classes.filter(c => isUncertain(c) && !c.teacher &&
+      !c.previousTeacher);
     const counts = new Map();
     green.forEach(c => counts.set(lessonIdentity(c), (counts.get(lessonIdentity(c)) || 0) + 1));
     const teachers = Array.isArray(res.teachers) ? res.teachers : [];
@@ -530,11 +536,36 @@
       return !teachers.some(other => other !== me &&
         (previousLessons(res, other) || []).some(p => lessonIdentity(p) === key));
     }).map(c => ({ ...c, teacher: me, matchedFromPrevious: true }));
-    return direct.concat(matched);
+    return direct.concat(sharedGreen, matched);
+  }
+  function seenEventsKey(res, me) { return 'seenEvents:' + me + ':' + res.mondayIso; }
+  function seenEvents(res, me) {
+    try {
+      const ids = JSON.parse(store.get(seenEventsKey(res, me)) || '[]');
+      return new Set(Array.isArray(ids) ? ids : []);
+    } catch (e) { return new Set(); }
   }
   function changesFor(res, me, mine) {
     const d = { marks: new Map(), removed: [], count: 0 };
     if (!isFresh) return d; // A cached schedule may be out of date.
+    if (Array.isArray(res.changeEvents)) {
+      // History is computed centrally; new devices can show it immediately.
+      // Acknowledgements stay on this device until staff authentication exists.
+      const acknowledged = seenEvents(res, me);
+      d.serverEvents = res.changeEvents.filter(e => e.teacher === me &&
+        e.id && !acknowledged.has(e.id));
+      d.serverEvents.forEach(e => {
+        if (e.kind === 'Removed' && e.previous) {
+          d.removed.push({...e.previous, removed:true});
+        } else if (e.current) {
+          const c = mine.find(x => lessonIdentity(x) === lessonIdentity(e.current) &&
+            statusText(x) === statusText(e.current));
+          if (c) d.marks.set(c, {kind:e.kind});
+        }
+      });
+      d.count = d.serverEvents.length;
+      return d;
+    }
     const k = seenKey(res, me);
     const prev = previousLessons(res, me);
     if (!prev) {
@@ -569,6 +600,31 @@
   }
   function changeSummary(ch) {
     if (!ch.count) return '';
+    if (ch.serverEvents) {
+      const items = ch.serverEvents.map(e => {
+        const c = e.current || e.previous;
+        const dayName = (DAYS.find(d => d[0] === c.day) || [c.day, c.day])[1];
+        const previous = e.previous, kind = e.kind;
+        let detail = '';
+        if (kind === 'Cancelled / to confirm') {
+          detail = '<div>Previously confirmed. Please check with the coordinator before attending.</div>';
+        } else if (kind === 'Confirmed again') {
+          detail = '<div>Previously cancelled / to confirm.</div>';
+        } else if (previous && kind === 'Changed') {
+          detail = '<div>Previously: ' + esc(previous.day) + ' ' +
+            esc(previous.start) + '–' + esc(previous.end) + ' · ' +
+            esc(classPlace(previous)) + '</div>';
+        }
+        return '<li><b>' + esc(c.code) + '</b> · ' + esc(dayName) + ' ' +
+          esc(c.start) + '–' + esc(c.end) + ' · ' + esc(classPlace(c)) +
+          ' <b>' + esc(kind) + '</b>' + detail + '</li>';
+      });
+      return '<section class="change-summary" aria-label="Timetable changes">' +
+        '<h2>' + ch.count + (ch.count === 1 ? ' timetable change' : ' timetable changes') +
+        '</h2><p>Changes recorded this week. These alerts are available on any device; ' +
+        'acknowledging them only affects this device.</p><ul>' + items.join('') +
+        '</ul><button type="button" data-action="ack">Mark changes as seen</button></section>';
+    }
     const lines = [];
     ch.marks.forEach((m, c) => {
       const target = classPlace(c);
@@ -610,8 +666,13 @@
     if (!target) return;
     const res = data[offset], me = sel.value;
     if (!res || !me || !isFresh) return;
-    // Remember matched green blocks too, so they remain visible after acknowledgement
-    // and can be recognised if their status later returns to confirmed.
+    if (Array.isArray(res.changeEvents)) {
+      const allIds = res.changeEvents.filter(e => e.teacher === me && e.id)
+        .map(e => e.id);
+      store.set(seenEventsKey(res, me), JSON.stringify(
+        [...new Set([...seenEvents(res, me), ...allIds])].slice(-300)));
+    }
+    // Retain the legacy per-device baseline for older backend deployments.
     store.set(seenKey(res, me), JSON.stringify(teacherLessons(res, me).map(storedClass)));
     render();
   });
