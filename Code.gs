@@ -68,7 +68,8 @@ const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123',
 // week's and next week's files and keeps the result ready in the cache. The page
 // arrives with that data already inside it, so opening the app doesn't wait on
 // Drive or the timetable sheets.
-const SNAPSHOT_KEY = 'snapshot_v18';
+const SNAPSHOT_KEY = 'snapshot_v19';
+const CHANGE_HISTORY_PREFIX = 'teacherChangeHistory_v1_';
 const CACHE_SECONDS = 6 * 60 * 60;   // the longest Apps Script allows
 
 function doGet(e) {
@@ -119,6 +120,8 @@ function refreshSnapshot() {
     thisMonday: mondayOf_(new Date()).toISOString(),
     weeks: [0, 1].map(o => buildWeek_(o, weeks, teachers, mapKey)),
   };
+  try { attachSharedChanges_(snap.weeks); }
+  catch (err) { console.error('Shared change history: ' + (err.message || err)); }
   // The live list is a derived view; a write failure must never stop staff
   // from viewing the timetable or erase the permanent colour assignments.
   try {
@@ -461,6 +464,137 @@ function parseWeek_(fileId) {
     slots: times.map(t => fmtMins_(t.mins)),
     parserWarnings: parserWarnings,
   };
+}
+
+// ---------- Cross-device, server-side timetable change history ----------
+// Staff selection is not authenticated, so never offer a shared "mark seen"
+// write endpoint. Events and confirmed ownership are shared; read state is local.
+function historyIdentity_(c) {
+  return JSON.stringify([c.day,c.start,c.end,String(c.room||'').trim(),!!c.offsite,
+    !!c.online,String(c.code||'').trim().replace(/\s+/g,' ').toUpperCase()]);
+}
+function historyClass_(c, teacher) {
+  return {day:c.day,start:c.start,end:c.end,room:c.room||'',offsite:!!c.offsite,
+    online:!!c.online,code:c.code||'',notes:c.notes||'',
+    status:c.status==='uncertain'?'uncertain':'confirmed',teacher:teacher};
+}
+function historySignature_(c) {
+  return JSON.stringify([historyIdentity_(c),c.status,c.notes||'',c.teacher]);
+}
+// Script Properties have a per-value size limit. Split an entire week's
+// baseline + capped events into small chunks and commit the manifest last.
+function readChangeHistory_(props,iso) {
+  const key=CHANGE_HISTORY_PREFIX+String(iso).slice(0,10);
+  const manifest=props.getProperty(key);
+  if(!manifest) return null;
+  const n=Number(manifest);
+  if(!Number.isInteger(n)||n<1||n>200) throw new Error('Invalid history manifest: '+iso);
+  const parts=[];
+  for(let i=0;i<n;i++){
+    const v=props.getProperty(key+'_'+i);
+    if(v==null) throw new Error('Incomplete change history: '+iso);
+    parts.push(v);
+  }
+  const state=JSON.parse(parts.join(''));
+  if(!state||!Array.isArray(state.last)||!Array.isArray(state.events))
+    throw new Error('Invalid change history: '+iso);
+  return state;
+}
+function writeChangeHistory_(props,iso,state) {
+  const key=CHANGE_HISTORY_PREFIX+String(iso).slice(0,10);
+  const parts=JSON.stringify(state).match(/[\s\S]{1,5000}/g)||[''];
+  if(parts.length>200) throw new Error('History too large for script properties');
+  const oldParts=Number(props.getProperty(key)||0);
+  const values={};
+  parts.forEach((v,i)=>{values[key+'_'+i]=v});
+  props.setProperties(values,false);
+  props.setProperty(key,String(parts.length));
+  for(let i=parts.length;i<oldParts&&i<200;i++) props.deleteProperty(key+'_'+i);
+}
+function provenTeacherLessons_(classes,previous) {
+  const direct=classes.filter(c=>c.teacher&&!c.ignored&&c.status!=='uncertain')
+    .map(c=>historyClass_(c,c.teacher));
+  const old=(previous||[]).filter(p=>p.teacher);
+  const green=classes.filter(c=>c.status==='uncertain'&&!c.ignored&&!c.teacher);
+  const greenCounts=new Map();
+  green.forEach(c=>{
+    const id=historyIdentity_(c);
+    greenCounts.set(id,(greenCounts.get(id)||0)+1);
+  });
+  const directIds=new Set(direct.map(historyIdentity_));
+  const inherited=[];
+  green.forEach(c=>{
+    const id=historyIdentity_(c);
+    if(greenCounts.get(id)!==1||directIds.has(id)) return;
+    const matches=old.filter(p=>historyIdentity_(p)===id);
+    if(matches.length!==1) return;
+    c.previousTeacher=matches[0].teacher; // advisory; NOT a confirmed assignment
+    inherited.push(historyClass_(c,matches[0].teacher));
+  });
+  return direct.concat(inherited);
+}
+function diffTeacherLessons_(previous,current) {
+  const left=previous.slice(),unmatched=[],events=[];
+  current.forEach(c=>{
+    const i=left.findIndex(p=>historySignature_(p)===historySignature_(c));
+    if(i<0) unmatched.push(c); else left.splice(i,1);
+  });
+  unmatched.forEach(c=>{
+    const exact=left.map((p,i)=>p.teacher===c.teacher&&
+      historyIdentity_(p)===historyIdentity_(c)?i:-1).filter(i=>i>=0);
+    let i=exact.length===1&&unmatched.filter(x=>x.teacher===c.teacher&&
+      historyIdentity_(x)===historyIdentity_(c)).length===1?exact[0]:-1;
+    if(i<0) {
+      const course=String(c.code||'').trim().toUpperCase();
+      const candidates=left.map((p,j)=>p.teacher===c.teacher&&
+        String(p.code||'').trim().toUpperCase()===course?j:-1).filter(j=>j>=0);
+      if(candidates.length===1&&unmatched.filter(x=>x.teacher===c.teacher&&
+        String(x.code||'').trim().toUpperCase()===course).length===1)
+        i=candidates[0];
+    }
+    if(i<0){events.push({teacher:c.teacher,kind:'New',current:c,previous:null});return;}
+    const p=left.splice(i,1)[0];
+    const kind=p.status!==c.status?
+      (c.status==='uncertain'?'Cancelled / to confirm':'Confirmed again'):'Changed';
+    events.push({teacher:c.teacher,kind:kind,current:c,previous:p});
+  });
+  left.forEach(p=>events.push({teacher:p.teacher,kind:'Removed',current:null,previous:p}));
+  return events;
+}
+function attachSharedChanges_(weeks) {
+  const lock=LockService.getScriptLock();
+  if(!lock.tryLock(15000)) throw new Error('Change history locked');
+  try {
+    const props=PropertiesService.getScriptProperties();
+    (weeks||[]).forEach(week=>{
+      week.changeEvents=[];
+      if(!week.found||!Array.isArray(week.classes)||!week.classes.length) return;
+      const prior=readChangeHistory_(props,week.mondayIso);
+      const last=prior?prior.last:[];
+      const current=provenTeacherLessons_(week.classes,last);
+      const newEvents=prior?diffTeacherLessons_(last,current):[];
+      const events=prior?prior.events.slice(-249):[];
+      let nextId=prior?Number(prior.nextId||1):1;
+      newEvents.forEach(event=>{
+        event.id=String(week.mondayIso).slice(0,10)+':'+(nextId++);
+        events.push(event);
+      });
+      const trimmed=events.slice(-250);
+      if(!prior||newEvents.length||JSON.stringify(last)!==JSON.stringify(current))
+        writeChangeHistory_(props,week.mondayIso,{last:current,events:trimmed,nextId:nextId});
+      week.changeEvents=trimmed;
+    });
+    // Retain history for both calendar weeks even if Drive is temporarily
+    // unavailable. Never erase source baselines simply because a file vanished.
+    const monday=mondayOf_(new Date());
+    const next=new Date(monday); next.setDate(next.getDate()+7);
+    const keep=new Set([monday.toISOString().slice(0,10),
+      next.toISOString().slice(0,10)]);
+    props.getKeys().filter(k=>k.startsWith(CHANGE_HISTORY_PREFIX)).forEach(k=>{
+      const day=k.slice(CHANGE_HISTORY_PREFIX.length,CHANGE_HISTORY_PREFIX.length+10);
+      if(!keep.has(day)) props.deleteProperty(k);
+    });
+  } finally {lock.releaseLock();}
 }
 
 // ---------- Automatically maintained live colour list ----------
