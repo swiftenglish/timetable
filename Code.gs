@@ -26,7 +26,7 @@ const IGNORE = 'IGNORE';                           // not a teacher: hidden, but
 // A cell starting with one of these begins a new class; anything else inside a
 // coloured block (dates, "o.l.", student counts) is shown as a note.
 // Add to this list if a class type ever runs together with the one before it.
-const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123', '124',
+const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123', '124', '125',
   'IBC', 'DOM', 'KET', 'PET', 'FCE', 'CAE', 'CPE', 'IELTS', 'TOEFL', 'K1', 'K2', 'K3',
   'K4', 'K5', 'MOVERS', 'STARTERS', 'FLYERS'];
 
@@ -35,7 +35,7 @@ const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123',
 // week's and next week's files and keeps the result ready in the cache. The page
 // arrives with that data already inside it, so opening the app doesn't wait on
 // Drive or the timetable sheets.
-const SNAPSHOT_KEY = 'snapshot_v8';
+const SNAPSHOT_KEY = 'snapshot_v9';
 const CACHE_SECONDS = 6 * 60 * 60;   // the longest Apps Script allows
 
 function doGet(e) {
@@ -104,7 +104,7 @@ function buildWeek_(offset, weeks, teachers, mapKey) {
   if (!week) {
     return { found: false, mondayIso: target.toISOString(), mondayLabel: fmtDate_(target), teachers: teachers };
   }
-  const key = 'parse2_' + week.id + '_' + week.modified + '_' + mapKey;
+  const key = 'parse3_' + week.id + '_' + week.modified + '_' + mapKey;
   const hit = getBig_(key);
   let parsed = hit ? JSON.parse(hit) : null;
   if (!parsed) {
