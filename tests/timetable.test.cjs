@@ -200,7 +200,7 @@ assert.equal(possible.stats.unassigned, 0);
 assert.equal(possible.warnings, 1, 'overlap warning still counts even with green blocks');
 const greenOnly = api.validateWeek_({
   parserWarnings: [], classes: Array.from({length: 140}, (_, i) => ({
-    day: 'MON', code: 'GREEN ' + i, room: String(i + 1),
+    day: 'MON', code: '121 ' + i, room: String(i + 1),
     start: '09:00', end: '09:30', teacher: null, ignored: false,
     status: 'uncertain', colour: '#d9ead3'
   }))
