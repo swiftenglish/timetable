@@ -456,6 +456,9 @@ function validateWeek_(parsed) {
     }
     if (c.code === '(no label)' || !String(c.code || '').trim()) {
       push('warning', 'missing-label', 'Occupied block has no class label (' + location(c) + ').', c);
+    } else if (looksLikeUnknownClassCode_(c.code)) {
+      push('warning', 'unrecognised-code',
+        'Check unfamiliar class label "' + c.code + '" (' + location(c) + ').', c);
     }
     if (!c.offsite && !c.online && !c.room) {
       push('warning', 'missing-room', '"' + c.code + '" has no classroom or offsite designation.', c);
