@@ -34,7 +34,7 @@ class MockElement {
   showModal() {}
   get selectedOptions() { return this.options.filter(o => o.value === this.value); }
 }
-function start({previous = [previousClass], current = [greenClass], otherPrevious = null} = {}) {
+function start({previous = [previousClass], current = [greenClass], otherPrevious = null, sharedEvents = null} = {}) {
   const storage = new Map([['tipHome', 'done'], ['teacher', 'Alice']]);
   if (previous !== null) storage.set('seen:Alice:' + monday, JSON.stringify(previous));
   if (otherPrevious) storage.set('seen:Bob:' + monday, JSON.stringify(otherPrevious));
@@ -43,7 +43,8 @@ function start({previous = [previousClass], current = [greenClass], otherPreviou
     teachers: ['Alice', 'Bob'],
     rooms: {MON: ['3'], TUE: ['3'], WED: ['3'], THU: ['3'], FRI: ['3']},
     slots: ['17:30', '18:00', '18:30', '19:00', '19:30'],
-    classes: current
+    classes: current,
+    ...(sharedEvents === null ? {} : {changeEvents:sharedEvents})
   };
   const response = {weeks: [week, {...week, mondayIso: '2026-11-23T00:00:00', classes: []}]};
   const ids = ['teacher', 'out', 'rDay', 'rTime', 'rDuration', 'syncStatus',
@@ -177,5 +178,39 @@ function start({previous = [previousClass], current = [greenClass], otherPreviou
   await shared.settle();
   assert.equal(shared.helper.teacherLessons(shared.week, 'Alice').length, 0);
 
-  console.log('PASS: green status matching, acknowledgement, recovery, Today, and ambiguity safeguards.');
+  // A fresh phone has no previous local snapshot, but the server has a proven
+  // prior teacher assignment and a stable event history.
+  const serverEvent = {id:'2026-11-16:1',teacher:'Alice',
+    kind:'Cancelled / to confirm',
+    previous:{...previousClass,teacher:'Alice'},
+    current:{...greenClass,teacher:'Alice'}};
+  const serverGreen = {...greenClass,previousTeacher:'Alice'};
+  const freshPhone = start({previous:null,current:[serverGreen],
+    sharedEvents:[serverEvent]});
+  await freshPhone.settle();
+  assert.equal(freshPhone.helper.teacherLessons(freshPhone.week,'Alice').length,1);
+  assert.match(freshPhone.elements.get('out').innerHTML,/1 timetable change/);
+  assert.match(freshPhone.elements.get('out').innerHTML,/Previously confirmed/);
+  assert.match(freshPhone.elements.get('out').innerHTML,/any device/);
+  assert.doesNotMatch(freshPhone.elements.get('out').innerHTML,/<b>Removed<\/b>/);
+  freshPhone.acknowledge();
+  assert.doesNotMatch(freshPhone.elements.get('out').innerHTML,/1 timetable change/);
+  assert.match(freshPhone.elements.get('out').innerHTML,/Cancelled \/ to confirm/);
+  assert.deepEqual(JSON.parse(freshPhone.storage.get('seenEvents:Alice:'+monday)),
+    ['2026-11-16:1']);
+  await freshPhone.refresh();
+  assert.doesNotMatch(freshPhone.elements.get('out').innerHTML,/1 timetable change/);
+  // A second phone independently sees the same shared event.
+  const secondPhone = start({previous:null,current:[{...serverGreen}],
+    sharedEvents:[serverEvent]});
+  await secondPhone.settle();
+  assert.match(secondPhone.elements.get('out').innerHTML,/1 timetable change/);
+  assert.match(secondPhone.elements.get('out').innerHTML,/B2 65/);
+  // Do not show a green lesson to somebody else without proven ownership.
+  const unowned = start({previous:null,current:[{...greenClass}],
+    sharedEvents:[]});
+  await unowned.settle();
+  assert.equal(unowned.helper.teacherLessons(unowned.week,'Alice').length,0);
+  assert.equal(unowned.helper.teacherLessons(unowned.week,'Bob').length,0);
+  console.log('PASS: green status matching, shared new-device alerts, local acknowledgment, and ambiguity safeguards.');
 })().catch(err => { console.error(err); process.exitCode = 1; });
