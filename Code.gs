@@ -22,6 +22,16 @@ const GRID_TAB = 'TT';                             // tab name in each weekly fi
 const ALERT_ALSO = [];
 const COLOURS_TAB = 'Colours';                     // tab in THIS sheet: colour -> teacher
 const IGNORE = 'IGNORE';                           // not a teacher: hidden, but the room still counts as in use
+// Lilac artefacts apply only to Rooms 1 and 3; grey applies to any room.
+// Unlike the IGNORE teacher, artefacts do NOT occupy a classroom or count as lessons.
+const ROOM_DECORATIVE_COLOURS = ['#e5d8f6', '#d9d2e9'];
+const GLOBAL_DECORATIVE_COLOURS = ['#b7b7b7'];
+function isDecorativeCell_(room, colour) {
+  const hex = String(colour || '').trim().toLowerCase();
+  if (GLOBAL_DECORATIVE_COLOURS.includes(hex)) return true;
+  return (String(room).trim() === '1' || String(room).trim() === '3') &&
+    ROOM_DECORATIVE_COLOURS.includes(hex);
+}
 
 // Explicit course families, supplemented by flexible numbered-code recognition.
 // Ambiguous unfamiliar codes are flagged for review rather than split blindly.
@@ -34,7 +44,7 @@ const CLASS_PREFIXES = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '121', '122', '123',
 // week's and next week's files and keeps the result ready in the cache. The page
 // arrives with that data already inside it, so opening the app doesn't wait on
 // Drive or the timetable sheets.
-const SNAPSHOT_KEY = 'snapshot_v11';
+const SNAPSHOT_KEY = 'snapshot_v12';
 const CACHE_SECONDS = 6 * 60 * 60;   // the longest Apps Script allows
 
 function doGet(e) {
@@ -110,7 +120,7 @@ function buildWeek_(offset, weeks, teachers, mapKey) {
           day: '', time: '', room: '' }] }
     };
   }
-  const key = 'parse5_' + week.id + '_' + week.modified + '_' + mapKey;
+  const key = 'parse6_' + week.id + '_' + week.modified + '_' + mapKey;
   const hit = getBig_(key);
   let parsed = hit ? JSON.parse(hit) : null;
   if (!parsed) {
@@ -291,7 +301,12 @@ function parseWeek_(fileId) {
     times.forEach(t => {
       const colour = (bg[t.r][col.c] || '#ffffff').toLowerCase();
       const cell = text[t.r][col.c].replace(/\s+/g, ' ').trim();
-      if (colour === '#ffffff') { close(); return; }
+      // Treat these formatting-only cells exactly like empty space, so they
+      // neither extend a lesson nor create one or block the Free Rooms finder.
+      if (colour === '#ffffff' || isDecorativeCell_(col.room, colour)) {
+        close();
+        return;
+      }
       // Same colour continues the class, unless the cell holds a new class code
       // (a teacher's back-to-back classes in one room share a colour).
       if (cur && cur.colour === colour && !(cell && isClassCode_(cell))) {
