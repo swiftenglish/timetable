@@ -619,7 +619,7 @@ function coloursSheet_() {
   let sh = ss.getSheetByName(COLOURS_TAB);
   if (!sh) {
     sh = ss.insertSheet(COLOURS_TAB);
-    sh.appendRow(['Colour', 'Teacher', 'Where it came from', 'Swatch']);
+    sh.appendRow(['Colour', 'Teacher / activity', 'Where it came from', 'Swatch']);
     sh.setFrozenRows(1);
   }
   return sh;
